@@ -1,12 +1,13 @@
 import json
+import time
 import datetime
 import requests
 import yfinance as yf
 
 FUNDS = {
-    "野村台灣運籌": "ACKH03",
-    "野村優質(累積)": "ACIC01",
-    "施羅德台灣樂活A": "ACES10"
+    "野村台灣運籌": "野村台灣運籌",
+    "野村優質(累積)": "野村優質基金-累積類型新臺幣計價",
+    "施羅德台灣樂活A": "施羅德台灣樂活中小基金-A類型"
 }
 
 BENCHMARKS = {
@@ -16,37 +17,60 @@ BENCHMARKS = {
 }
 
 START_DATE = "2010-01-01"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://cnyes.com"
+}
 
-def fetch_fund_history(fund_code):
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
-    url = "https://moneydj.com"
-    params = {"a": fund_code, "b": START_DATE, "c": today_str}
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://moneydj.com"
-    }
-    resp = requests.get(url, params=params, headers=headers, timeout=20)
+def find_cnyes_fund_id(keyword):
+    url = "https://cnyes.com"
+    params = {"q": keyword, "page": 1, "limit": 5}
+    resp = requests.get(url, params=params, headers=HEADERS, timeout=20)
     resp.raise_for_status()
+    data = resp.json()
+    items = data.get("items", {}).get("data", [])
+    if not items:
+        raise ValueError(f"Cannot find fund ID on cnyes for keyword: {keyword}")
+    return items[0]["cnyesId"], items[0].get("displayNameLocal", keyword)
 
-    parts = resp.text.strip().split(" ")
-    if len(parts) < 2:
-        raise ValueError(f"Unexpected response format for {fund_code}: {resp.text[:100]}")
+def fetch_fund_history(keyword):
+    cnyes_id, matched_name = find_cnyes_fund_id(keyword)
+    print(f"  -> Matched cnyesId: {cnyes_id} ({matched_name})")
 
-    dates = parts.pop(0).split(",")
-    navs = parts.pop(0).split(",")
+    start_ts = int(datetime.datetime.strptime(START_DATE, "%Y-%m-%d").timestamp())
+    end_ts = int(time.time()) + 86400
 
+    url = f"https://cnyes.com{cnyes_id}/nav"
+    params = {"start": start_ts, "end": end_ts, "format": "json"}
+    resp = requests.get(url, params=params, headers=HEADERS, timeout=20)
+    resp.raise_for_status()
+    data = resp.json()
+
+    items = data.get("items", [])
     result = {}
-    for d, n in zip(dates, navs):
-        try:
-            clean_date = d.replace("/", "-")
-            if len(clean_date) == 8 and "-" not in clean_date:
-                clean_date = f"{clean_date[:4]}-{clean_date[4:6]}-{clean_date[6:8]}"
-            val = float(n)
-            if val > 0:
-                result[clean_date] = val
-        except ValueError:
+    for row in items:
+        # 支援 dict 或 list 格式
+        if isinstance(row, dict):
+            ts = row.get("date") or row.get("tradeDate")
+            nav = row.get("nav") or row.get("price")
+        elif isinstance(row, list) and len(row) >= 2:
+            ts, nav = row[0], row[1]
+        else:
             continue
-    return result
+
+        if ts is None or nav is None:
+            continue
+
+        # 轉換時間戳（毫秒或秒）為 YYYY-MM-DD（台灣時區 UTC+8）
+        if ts > 1e11:
+            ts = ts / 1000.0
+        dt = datetime.datetime.utcfromtimestamp(ts) + datetime.timedelta(hours=8)
+        date_str = dt.strftime("%Y-%m-%d")
+        val = float(nav)
+        if val > 0 and date_str >= START_DATE:
+            result[date_str] = round(val, 4)
+
+    return dict(sorted(result.items()))
 
 def fetch_benchmark_history(ticker):
     df = yf.download(ticker, start=START_DATE, progress=False, auto_adjust=True)
@@ -69,9 +93,9 @@ def main():
         "benchmarks": {}
     }
 
-    for name, code in FUNDS.items():
-        print(f"Fetching fund: {name} ({code})...")
-        output["funds"][name] = fetch_fund_history(code)
+    for name, keyword in FUNDS.items():
+        print(f"Fetching fund: {name}...")
+        output["funds"][name] = fetch_fund_history(keyword)
         print(f"  -> {name} fetched {len(output['funds'][name])} records.")
 
     for name, ticker in BENCHMARKS.items():
