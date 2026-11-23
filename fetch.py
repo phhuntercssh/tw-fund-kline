@@ -19,12 +19,17 @@ START_DATE = "2010-01-01"
 
 def fetch_fund_history(fund_code):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
-    url = f"https://moneydj.com{fund_code}&b={START_DATE}&c={today_str}"
+    url = "https://moneydj.com"
+    params = {
+        "a": fund_code,
+        "b": START_DATE,
+        "c": today_str
+    }
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://moneydj.com"
     }
-    resp = requests.get(url, headers=headers, timeout=20)
+    resp = requests.get(url, params=params, headers=headers, timeout=20)
     resp.raise_for_status()
 
     parts = resp.text.strip().split(" ")
@@ -56,7 +61,7 @@ def fetch_benchmark_history(ticker):
     if hasattr(close_series, "columns"):
         close_series = close_series.iloc[:, 0]
     for idx, val in close_series.items():
-        if val == val:  # 排除 NaN
+        if val == val:
             date_str = idx.strftime("%Y-%m-%d")
             result[date_str] = round(float(val), 2)
     return result
