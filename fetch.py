@@ -1,11 +1,13 @@
+import re
 import json
 import datetime
+import requests
 import yfinance as yf
 
 FUNDS = {
-    "野村台灣運籌": ["0P00006B0B.TW", "野村台灣運籌"],
-    "野村優質(累積)": ["0P00006AYX.TW", "野村優質"],
-    "施羅德台灣樂活A": ["0P0000J0Y4.TW", "施羅德台灣樂活"]
+    "野村台灣運籌": "ACKH03",
+    "野村優質(累積)": "ACIC01",
+    "施羅德台灣樂活A": "ACES10"
 }
 
 BENCHMARKS = {
@@ -16,7 +18,52 @@ BENCHMARKS = {
 
 START_DATE = "2010-01-01"
 
-def download_series(ticker, decimals=4):
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8"
+}
+
+def fetch_fund_history(fund_code):
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    # 嘗試多個 MoneyDJ 鏡像站點的歷史淨值查詢介面（含總站與銀行代銷靜態介面）
+    candidate_urls = [
+        f"https://moneydj.com{fund_code}&b={START_DATE}&c={today_str}",
+        f"https://fund.hncb.com.tw/w/wr/wr02_{fund_code}.djhtm",
+        f"https://taishinbankrwd.moneydj.com/w/wr/wr02_{fund_code}.djhtm",
+        f"https://bopfund.moneydj.com/w/wr/wr02.djhtm?a={fund_code}"
+    ]
+
+    result = {}
+    for url in candidate_urls:
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=20)
+            if resp.status_code != 200:
+                continue
+            # 自動處理 Big5 / UTF-8 編碼避免亂碼干擾標籤解析
+            resp.encoding = resp.apparent_encoding or "big5"
+            html = resp.text
+
+            # 去除所有 HTML 標籤，只保留純文字與換行
+            clean_text = re.sub(r"<[^>]+>", " ", html)
+            # 尋找「YYYY/MM/DD」緊跟「淨值數字」的配對
+            pairs = re.findall(r"(\d{4}/\d{2}/\d{2})\s+([\d,]+\.\d+)", clean_text)
+            for d_raw, nav_raw in pairs:
+                d_iso = d_raw.replace("/", "-")
+                val = float(nav_raw.replace(",", ""))
+                if val > 0 and d_iso >= START_DATE:
+                    result[d_iso] = round(val, 4)
+
+            if len(result) > 0:
+                print(f"  -> Matched via {url.split('/')[2]} ({len(result)} records)")
+                break
+        except Exception as e:
+            print(f"  -> Mirror failed ({url}): {e}")
+            continue
+
+    return dict(sorted(result.items()))
+
+def fetch_benchmark_history(ticker):
     df = yf.download(ticker, start=START_DATE, progress=False, auto_adjust=True)
     result = {}
     if df.empty:
@@ -25,26 +72,10 @@ def download_series(ticker, decimals=4):
     if hasattr(close_series, "columns"):
         close_series = close_series.iloc[:, 0]
     for idx, val in close_series.items():
-        if val == val:  # 排除 NaN
+        if val == val:
             date_str = idx.strftime("%Y-%m-%d")
-            result[date_str] = round(float(val), decimals)
+            result[date_str] = round(float(val), 2)
     return result
-
-def fetch_fund_smart(primary_ticker, keyword):
-    # 1. 優先嘗試精確的 0P0000...TW 代號
-    data = download_series(primary_ticker, decimals=4)
-    if len(data) > 0:
-        return primary_ticker, data
-
-    # 2. 若無資料則自動向 Yahoo Finance 搜尋該基金代號
-    search = yf.Search(keyword, max_results=5)
-    for q in getattr(search, "quotes", []):
-        sym = q.get("symbol", "")
-        if sym.endswith(".TW"):
-            data = download_series(sym, decimals=4)
-            if len(data) > 0:
-                return sym, data
-    return primary_ticker, {}
 
 def main():
     output = {
@@ -53,16 +84,14 @@ def main():
         "benchmarks": {}
     }
 
-    for name, (ticker, keyword) in FUNDS.items():
-        print(f"Fetching fund: {name} ({ticker})...")
-        used_ticker, records = fetch_fund_smart(ticker, keyword)
-        output["funds"][name] = records
-        print(f"  -> {name} [{used_ticker}] fetched {len(records)} records.")
+    for name, code in FUNDS.items():
+        print(f"Fetching fund: {name} ({code})...")
+        output["funds"][name] = fetch_fund_history(code)
+        print(f"  -> {name} total records: {len(output['funds'][name])}")
 
     for name, ticker in BENCHMARKS.items():
         print(f"Fetching benchmark: {name} ({ticker})...")
-        output["benchmarks"][name] = download_series(ticker, decimals=2)
-        print(f"  -> {name} fetched {len(output['benchmarks'][name])} records.")
+        output["benchmarks"][name] = fetch_benchmark_history(ticker)
 
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
