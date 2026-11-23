@@ -1,15 +1,15 @@
 import os
+import re
 import json
 import time
 import datetime
 import requests
 import yfinance as yf
 
-# 設定基金名稱與對應代碼（同時保留 MoneyDJ 代碼供近30日雙重備援）
 FUNDS = {
-    "野村台灣運籌": {"cnyes": "A32002", "mdj": "ACKH03"},
-    "野村優質(累積)": {"cnyes": "A32001", "mdj": "ACIC01"},
-    "施羅德台灣樂活A": {"cnyes": "A42001", "mdj": "ACES10"},
+    "野村台灣運籌": {"query": "野村台灣運籌", "must_have": ["野村", "運籌"], "exclude": ["外幣", "美元", "人民幣"]},
+    "野村優質(累積)": {"query": "野村優質", "must_have": ["野村", "優質"], "exclude": ["外幣", "美元", "人民幣", "S類型", "R類型"]},
+    "施羅德台灣樂活A": {"query": "施羅德台灣樂活", "must_have": ["施羅德", "樂活"], "exclude": ["C", "I", "外幣", "美元"]}
 }
 
 BENCHMARKS = {
@@ -24,7 +24,7 @@ DATA_FILE = "data.json"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
-    "Referer": "https://fund.cnyes.com/",
+    "Referer": "https://cnyes.com",
 }
 
 
@@ -38,46 +38,54 @@ def load_existing_data():
     return {"funds": {}, "benchmarks": {}}
 
 
-def resolve_cnyes_id(session, keyword, fallback_id):
-    """透過鉅亨網搜尋 API 確認最新基金代碼（避免代碼變更）"""
-    search_keyword = keyword.split("(")[0]
-    url = f"https://cnyes.com{search_keyword}"
+def find_cnyes_id(session, rule):
+    """透過鉅亨網搜尋 API 精準取得該基金的 cnyesId"""
+    url = "https://cnyes.com"
+    params = {"q": rule["query"], "page": 1, "perPage": 30}
     try:
-        resp = session.get(url, headers=HEADERS, timeout=15)
-        if resp.status_code == 200:
-            items = resp.json().get("items", {}).get("data", [])
-            for item in items:
-                name = item.get("displayNameLocal", "") or item.get("name", "")
-                if search_keyword in name:
-                    # 區分累積型或 A 級別
-                    if "優質" in keyword and "累積" not in name and "A" not in name and "TWD" not in name:
-                        continue
-                    if "樂活" in keyword and "A" not in name:
-                        continue
-                    found_id = item.get("cnyesId")
-                    if found_id:
-                        return found_id
-    except Exception:
-        pass
-    return fallback_id
+        resp = session.get(url, params=params, headers=HEADERS, timeout=20)
+        print(f"    [搜尋API] HTTP {resp.status_code}")
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+        items = data.get("items", {}).get("data", [])
+        for item in items:
+            name = item.get("displayNameLocal") or item.get("name") or ""
+            cid = item.get("cnyesId")
+            if not cid:
+                continue
+            if all(k in name for k in rule["must_have"]) and not any(ex in name for ex in rule["exclude"]):
+                print(f"    [配對成功] {name} -> cnyesId = {cid}")
+                return cid
+        # 若無完全符合，印出搜尋到的前 3 筆協助排查
+        sample = [(x.get("displayNameLocal"), x.get("cnyesId")) for x in items[:3]]
+        print(f"    [配對失敗] 候選清單: {sample}")
+    except Exception as e:
+        print(f"    [搜尋異常] {e}")
+    return None
 
 
-def fetch_cnyes_full_history(session, cnyes_id, start_date_str):
-    """從鉅亨網 API 一次拉取 2010-01-04 至今全部歷史淨值（支援海外 IP 與 GitHub Actions）"""
+def fetch_cnyes_nav_history(session, cnyes_id, start_date_str):
+    """從鉅亨網歷史淨值 API 拉取 2010-01-04 至今全部每日淨值"""
     start_ts = int(datetime.datetime.strptime(start_date_str, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc).timestamp())
     end_ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 86400
 
     result = {}
     page = 1
     while True:
-        url = (
-            f"https://cnyes.com{cnyes_id}/nav"
-            f"?format=table&startAt={start_ts}&endAt={end_ts}&page={page}&perPage=2000"
-        )
+        url = f"https://cnyes.com{cnyes_id}/nav"
+        params = {
+            "format": "table",
+            "startAt": start_ts,
+            "endAt": end_ts,
+            "page": page,
+            "perPage": 2500
+        }
         try:
-            resp = session.get(url, headers=HEADERS, timeout=25)
+            resp = session.get(url, params=params, headers=HEADERS, timeout=25)
             if resp.status_code != 200:
-                print(f"  -> cnyes API HTTP {resp.status_code} (page {page})")
+                print(f"    [淨值API] HTTP {resp.status_code} (page {page}): {resp.text[:120]}")
                 break
 
             payload = resp.json()
@@ -87,11 +95,12 @@ def fetch_cnyes_full_history(session, cnyes_id, start_date_str):
                 break
 
             for row in rows:
-                # tradeDate 為 Unix timestamp (秒)
                 ts = row.get("tradeDate")
                 nav = row.get("nav")
                 if ts is not None and nav is not None:
-                    dt_str = datetime.datetime.fromtimestamp(int(ts), tz=datetime.timezone(datetime.timedelta(hours=8))).strftime("%Y-%m-%d")
+                    dt_str = datetime.datetime.fromtimestamp(
+                        int(ts), tz=datetime.timezone(datetime.timedelta(hours=8))
+                    ).strftime("%Y-%m-%d")
                     val = float(nav)
                     if val > 0 and dt_str >= start_date_str:
                         result[dt_str] = round(val, 4)
@@ -102,27 +111,30 @@ def fetch_cnyes_full_history(session, cnyes_id, start_date_str):
             page += 1
             time.sleep(0.3)
         except Exception as e:
-            print(f"  -> cnyes API 發生錯誤: {e}")
+            print(f"    [淨值API異常] {e}")
             break
 
     return result
 
 
-def update_fund(session, fund_name, codes, existing_records):
+def update_fund(session, fund_name, rule, existing_records):
     merged = dict(existing_records)
     earliest_date = min(merged.keys()) if merged else "9999-12-31"
 
-    cnyes_id = resolve_cnyes_id(session, fund_name, codes["cnyes"])
+    cnyes_id = find_cnyes_id(session, rule)
+    if not cnyes_id:
+        print(f"  -> 無法取得 {fund_name} 的 cnyesId，保留原有資料")
+        return dict(sorted(merged.items()))
 
-    # 若資料尚未涵蓋 2010 年，從 2010-01-04 完整拉取；否則只抓最近 30 天做增量更新
     if earliest_date > "2010-02-01" or len(merged) < 1000:
-        print(f"  -> 透過鉅亨網 API ({cnyes_id}) 拉取 {START_DATE} 至今完整歷史...")
-        fetched = fetch_cnyes_full_history(session, cnyes_id, START_DATE)
+        print(f"  -> 開始拉取 {START_DATE} 至今完整歷史淨值...")
+        fetched = fetch_cnyes_nav_history(session, cnyes_id, START_DATE)
     else:
         recent_start = (datetime.date.today() - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
-        print(f"  -> 透過鉅亨網 API ({cnyes_id}) 增量更新近 30 日淨值...")
-        fetched = fetch_cnyes_full_history(session, cnyes_id, recent_start)
+        print(f"  -> 增量更新近 30 日淨值 ({recent_start} 至今)...")
+        fetched = fetch_cnyes_nav_history(session, cnyes_id, recent_start)
 
+    print(f"  -> 本次成功抓取 {len(fetched)} 筆新資料")
     merged.update(fetched)
     return dict(sorted(merged.items()))
 
@@ -154,15 +166,15 @@ def main():
 
     session = requests.Session()
 
-    for name, codes in FUNDS.items():
+    for name, rule in FUNDS.items():
         print(f"Fetching fund: {name}...")
         prev_records = existing_funds.get(name, {})
-        output["funds"][name] = update_fund(session, name, codes, prev_records)
+        output["funds"][name] = update_fund(session, name, rule, prev_records)
         dates = list(output["funds"][name].keys())
         if dates:
-            print(f"  -> {name} 總筆數: {len(dates)} 筆 ({dates[0]} ~ {dates[-1]})")
+            print(f"  -> {name} 累計總筆數: {len(dates)} 筆 ({dates} ~ {dates[-1]})")
         else:
-            print(f"  -> {name} 總筆數: 0 筆")
+            print(f"  -> {name} 累計總筆數: 0 筆")
         time.sleep(0.5)
 
     for name, ticker in BENCHMARKS.items():
