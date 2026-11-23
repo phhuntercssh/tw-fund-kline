@@ -1,15 +1,15 @@
 import os
-import re
 import json
 import time
 import datetime
 import requests
 import yfinance as yf
 
+# 設定基金名稱與對應代碼（同時保留 MoneyDJ 代碼供近30日雙重備援）
 FUNDS = {
-    "野村台灣運籌": "ACKH03",
-    "野村優質(累積)": "ACIC01",
-    "施羅德台灣樂活A": "ACES10"
+    "野村台灣運籌": {"cnyes": "A32002", "mdj": "ACKH03"},
+    "野村優質(累積)": {"cnyes": "A32001", "mdj": "ACIC01"},
+    "施羅德台灣樂活A": {"cnyes": "A42001", "mdj": "ACES10"},
 }
 
 BENCHMARKS = {
@@ -21,10 +21,10 @@ BENCHMARKS = {
 START_DATE = "2010-01-04"
 DATA_FILE = "data.json"
 
-BASE_HEADERS = {
+HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Accept": "*/*",
-    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://fund.cnyes.com/",
 }
 
 
@@ -38,126 +38,92 @@ def load_existing_data():
     return {"funds": {}, "benchmarks": {}}
 
 
-def parse_chart_or_table_data(text):
-    """同時支援解析：
-    1. 走勢圖純數據格式（日期列表與淨值列表以逗號/分號分隔，如 2010/01/04,2010/01/05...;12.34,12.45...）
-    2. 一般 HTML 表格格式（YYYY/MM/DD 緊跟淨值）
-    """
+def resolve_cnyes_id(session, keyword, fallback_id):
+    """透過鉅亨網搜尋 API 確認最新基金代碼（避免代碼變更）"""
+    search_keyword = keyword.split("(")[0]
+    url = f"https://cnyes.com{search_keyword}"
+    try:
+        resp = session.get(url, headers=HEADERS, timeout=15)
+        if resp.status_code == 200:
+            items = resp.json().get("items", {}).get("data", [])
+            for item in items:
+                name = item.get("displayNameLocal", "") or item.get("name", "")
+                if search_keyword in name:
+                    # 區分累積型或 A 級別
+                    if "優質" in keyword and "累積" not in name and "A" not in name and "TWD" not in name:
+                        continue
+                    if "樂活" in keyword and "A" not in name:
+                        continue
+                    found_id = item.get("cnyesId")
+                    if found_id:
+                        return found_id
+    except Exception:
+        pass
+    return fallback_id
+
+
+def fetch_cnyes_full_history(session, cnyes_id, start_date_str):
+    """從鉅亨網 API 一次拉取 2010-01-04 至今全部歷史淨值（支援海外 IP 與 GitHub Actions）"""
+    start_ts = int(datetime.datetime.strptime(start_date_str, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc).timestamp())
+    end_ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp()) + 86400
+
     result = {}
+    page = 1
+    while True:
+        url = (
+            f"https://cnyes.com{cnyes_id}/nav"
+            f"?format=table&startAt={start_ts}&endAt={end_ts}&page={page}&perPage=2000"
+        )
+        try:
+            resp = session.get(url, headers=HEADERS, timeout=25)
+            if resp.status_code != 200:
+                print(f"  -> cnyes API HTTP {resp.status_code} (page {page})")
+                break
 
-    # 模式 A：解析走勢圖專用純數據格式（通常包含兩組等長的日期與數值陣列）
-    dates_found = re.findall(r"\b(\d{4}/\d{2}/\d{2})\b", text)
-    if len(dates_found) > 100 and ";" in text:
-        parts = text.strip().split(";")
-        # 尋找日期區塊與緊鄰的淨值數值區塊
-        for i in range(len(parts) - 1):
-            d_list = re.findall(r"\d{4}/\d{2}/\d{2}", parts[i])
-            if len(d_list) > 100:
-                v_list = [x.strip() for x in parts[i + 1].split(",") if re.match(r"^[\d.]+$", x.strip())]
-                if len(d_list) == len(v_list):
-                    for d_raw, v_raw in zip(d_list, v_list):
-                        d_iso = d_raw.replace("/", "-")
-                        val = float(v_raw)
-                        if val > 0 and d_iso >= START_DATE:
-                            result[d_iso] = round(val, 4)
-                    if result:
-                        return result
+            payload = resp.json()
+            items_block = payload.get("items", {})
+            rows = items_block.get("data", [])
+            if not rows:
+                break
 
-    # 模式 B：解析 HTML 表格中的 YYYY/MM/DD 與淨值
-    clean_text = re.sub(r"<[^>]+>", " ", text)
-    pairs = re.findall(r"(\d{4}/\d{2}/\d{2})\s+([\d,]+\.\d+)", clean_text)
-    for d_raw, nav_raw in pairs:
-        d_iso = d_raw.replace("/", "-")
-        val = float(nav_raw.replace(",", ""))
-        if val > 0 and d_iso >= START_DATE:
-            result[d_iso] = round(val, 4)
+            for row in rows:
+                # tradeDate 為 Unix timestamp (秒)
+                ts = row.get("tradeDate")
+                nav = row.get("nav")
+                if ts is not None and nav is not None:
+                    dt_str = datetime.datetime.fromtimestamp(int(ts), tz=datetime.timezone(datetime.timedelta(hours=8))).strftime("%Y-%m-%d")
+                    val = float(nav)
+                    if val > 0 and dt_str >= start_date_str:
+                        result[dt_str] = round(val, 4)
+
+            last_page = items_block.get("last_page", 1)
+            if page >= last_page:
+                break
+            page += 1
+            time.sleep(0.3)
+        except Exception as e:
+            print(f"  -> cnyes API 發生錯誤: {e}")
+            break
 
     return result
 
 
-def fetch_full_history_via_chart_api(session, fund_code):
-    """透過 MoneyDJ 體系走勢圖歷史資料接口（一次回傳成立至今全部每日淨值）"""
-    today_slash = datetime.date.today().strftime("%Y/%m/%d")
-    start_slash = START_DATE.replace("-", "/")
-
-    # MoneyDJ 基金走勢圖資料接口（GET 與 POST 雙重嘗試）
-    chart_endpoints = [
-        # 1. MoneyDJ 主站走勢圖數據接口 (bcd)
-        ("GET", f"https://moneydj.com{fund_code}&b={start_slash}&c={today_slash}", None),
-        # 2. 銀行代銷鏡像站走勢圖數據接口 (djbcd)
-        ("GET", f"https://hncb.com.tw{fund_code}&b={start_slash}&c={today_slash}", None),
-        ("GET", f"https://moneydj.com{fund_code}&b={start_slash}&c={today_slash}", None),
-        ("GET", f"https://moneydj.com{fund_code}&b={start_slash}&c={today_slash}", None),
-        # 3. POST 表單方式送出歷史區間查詢 (wr02.djhtm)
-        ("POST", f"https://hncb.com.tw_{fund_code}.djhtm", {"a": fund_code, "b": start_slash, "c": today_slash}),
-        ("POST", f"https://moneydj.com{fund_code}", {"b": start_slash, "c": today_slash}),
-    ]
-
-    for method, url, payload in chart_endpoints:
-        headers = {**BASE_HEADERS, "Referer": f"https://moneydj.com{fund_code}"}
-        try:
-            if method == "GET":
-                resp = session.get(url, headers=headers, timeout=25)
-            else:
-                resp = session.post(url, data=payload, headers=headers, timeout=25)
-
-            if resp.status_code == 200:
-                resp.encoding = "big5"
-                parsed = parse_chart_or_table_data(resp.text)
-                if len(parsed) > 100:
-                    print(f"  -> 成功透過 {url.split('/')[2]} 取得 {len(parsed)} 筆歷史淨值")
-                    return parsed
-        except Exception:
-            continue
-
-    return {}
-
-
-def fetch_recent_30_days(session, fund_code):
-    """抓取近 30 日最新淨值（MM/DD 格式）"""
-    url = f"https://moneydj.com{fund_code}"
-    headers = {**BASE_HEADERS, "Referer": url}
-    try:
-        resp = session.get(url, headers=headers, timeout=20)
-        if resp.status_code == 200:
-            resp.encoding = "big5"
-            clean_text = re.sub(r"<[^>]+>", " ", resp.text)
-            pairs = re.findall(r"(?<!\d)(\d{2}/\d{2})(?!\d)\s+([\d,]+\.\d+)", clean_text)
-            today = datetime.date.today()
-            parsed = {}
-            for md_str, nav_raw in pairs:
-                month, day = map(int, md_str.split("/"))
-                year = today.year - 1 if (month - today.month) > 2 else today.year
-                try:
-                    dt = datetime.date(year, month, day)
-                    if dt > today + datetime.timedelta(days=5):
-                        dt = datetime.date(year - 1, month, day)
-                    d_iso = dt.strftime("%Y-%m-%d")
-                    val = float(nav_raw.replace(",", ""))
-                    if val > 0 and d_iso >= START_DATE:
-                        parsed[d_iso] = round(val, 4)
-                except ValueError:
-                    continue
-            return parsed
-    except Exception:
-        pass
-    return {}
-
-
-def update_fund(session, fund_code, existing_records):
+def update_fund(session, fund_name, codes, existing_records):
     merged = dict(existing_records)
     earliest_date = min(merged.keys()) if merged else "9999-12-31"
 
-    # 若尚未取得 2010 年起的完整歷史，呼叫走勢圖數據接口 (BCDNavList.djbcd) 一次拉回全部歷史
+    cnyes_id = resolve_cnyes_id(session, fund_name, codes["cnyes"])
+
+    # 若資料尚未涵蓋 2010 年，從 2010-01-04 完整拉取；否則只抓最近 30 天做增量更新
     if earliest_date > "2010-02-01" or len(merged) < 1000:
-        print(f"  -> 目前最早僅至 {earliest_date}，嘗試從走勢圖接口拉取 {START_DATE} 至今完整歷史...")
-        full_data = fetch_full_history_via_chart_api(session, fund_code)
-        merged.update(full_data)
+        print(f"  -> 透過鉅亨網 API ({cnyes_id}) 拉取 {START_DATE} 至今完整歷史...")
+        fetched = fetch_cnyes_full_history(session, cnyes_id, START_DATE)
+    else:
+        recent_start = (datetime.date.today() - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+        print(f"  -> 透過鉅亨網 API ({cnyes_id}) 增量更新近 30 日淨值...")
+        fetched = fetch_cnyes_full_history(session, cnyes_id, recent_start)
 
-    # 再用近 30 日靜態表補上最新交易日淨值
-    recent = fetch_recent_30_days(session, fund_code)
-    merged.update(recent)
-
+    merged.update(fetched)
     return dict(sorted(merged.items()))
 
 
@@ -188,16 +154,16 @@ def main():
 
     session = requests.Session()
 
-    for name, code in FUNDS.items():
-        print(f"Fetching fund: {name} ({code})...")
+    for name, codes in FUNDS.items():
+        print(f"Fetching fund: {name}...")
         prev_records = existing_funds.get(name, {})
-        output["funds"][name] = update_fund(session, code, prev_records)
+        output["funds"][name] = update_fund(session, name, codes, prev_records)
         dates = list(output["funds"][name].keys())
         if dates:
             print(f"  -> {name} 總筆數: {len(dates)} 筆 ({dates[0]} ~ {dates[-1]})")
         else:
             print(f"  -> {name} 總筆數: 0 筆")
-        time.sleep(1.0)
+        time.sleep(0.5)
 
     for name, ticker in BENCHMARKS.items():
         print(f"Fetching benchmark: {name} ({ticker})...")
