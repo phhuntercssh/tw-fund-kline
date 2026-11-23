@@ -1,0 +1,35 @@
+name: Daily Fund NAV Update at 8PM CST
+
+on:
+  schedule:
+    # 每天 UTC 12:00 = 台灣時間 20:00 (PM 8:00) 執行
+    - cron: '0 12 * * 1-5'
+  workflow_dispatch: # 允許手動一鍵立即測試執行
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run fetch script
+        run: python fetch.py
+
+      - name: Commit and push updated data
+        run: |
+          git config --local user.email "github-actions[bot]@://github.com"
+          git config --local user.name "github-actions[bot]"
+          git add data.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update fund data $(date +'%Y-%m-%d')" && git push)
