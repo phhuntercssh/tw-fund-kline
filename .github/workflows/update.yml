@@ -15,14 +15,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Download Lightweight Charts locally
+      - name: Extract Lightweight Charts locally from npm
         run: |
           touch .nojekyll
-          curl -fSL "https://jsdelivr.net" -o lightweight-charts.js
-          if grep -q "^<" lightweight-charts.js; then
-            echo "Error: Downloaded file is HTML, not JS!"
-            exit 1
-          fi
+          npm install --no-save lightweight-charts@4.1.3
+          cp node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js lightweight-charts.js
+          rm -rf node_modules package-lock.json
 
       - name: Set up Python
         uses: actions/setup-python@v6
