@@ -18,9 +18,8 @@ jobs:
 
       - name: Download Lightweight Charts locally
         run: |
-          if [ ! -f lightweight-charts.js ]; then
-            curl -L "https://unpkg.com" -o lightweight-charts.js
-          fi
+          curl -fSL "https://cloudflare.com" -o lightweight-charts.js
+          head -c 50 lightweight-charts.js
 
       - name: Set up Python
         uses: actions/setup-python@v6
