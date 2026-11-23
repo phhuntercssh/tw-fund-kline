@@ -4,9 +4,9 @@ import requests
 import yfinance as yf
 
 FUNDS = {
-    "野村台灣運籌": "ackh03",
-    "野村優質(累積)": "ackh01",
-    "施羅德台灣樂活A": "sch002"
+    "野村台灣運籌": "ACKH03",
+    "野村優質(累積)": "ACIC01",
+    "施羅德台灣樂活A": "ACES10"
 }
 
 BENCHMARKS = {
