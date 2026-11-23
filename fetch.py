@@ -72,6 +72,7 @@ def main():
     for name, code in FUNDS.items():
         print(f"Fetching fund: {name} ({code})...")
         output["funds"][name] = fetch_fund_history(code)
+        print(f"  -> {name} fetched {len(output['funds'][name])} records.")
 
     for name, ticker in BENCHMARKS.items():
         print(f"Fetching benchmark: {name} ({ticker})...")
