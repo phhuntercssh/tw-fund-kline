@@ -2,9 +2,8 @@ name: Daily Fund NAV Update at 8PM CST
 
 on:
   schedule:
-    # 每天 UTC 12:00 = 台灣時間 20:00 (PM 8:00) 執行
     - cron: '0 12 * * 1-5'
-  workflow_dispatch: # 允許手動一鍵立即測試執行
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,7 +17,12 @@ jobs:
 
       - name: Download Lightweight Charts locally
         run: |
-          curl -fSL "https://cloudflare.com" -o lightweight-charts.js
+          touch .nojekyll
+          curl -fSL "https://jsdelivr.net" -o lightweight-charts.js
+          if grep -q "^<" lightweight-charts.js; then
+            echo "Error: Downloaded file is HTML, not JS!"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -33,9 +37,9 @@ jobs:
 
       - name: Commit and push updated data
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.email "github-actions[bot]@://github.com"
           git config --local user.name "github-actions[bot]"
-          git add data.json lightweight-charts.js
+          git add data.json lightweight-charts.js .nojekyll
           if ! git diff --quiet --staged; then
             git commit -m "Update fund data and chart library $(date +'%Y-%m-%d')"
             git pull --rebase -X theirs origin main
