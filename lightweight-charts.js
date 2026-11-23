@@ -382,7 +382,7 @@ const gtmContainerSrc = "https://www.googletagmanager.com/gtm.js?id=GTM-NDGPDFZ"
 <link rel="stylesheet" href="/_astro/index.CN3UJUeJ.css">
 <link rel="stylesheet" href="/_astro/DomainSearchApp.BvqqtzyA.css"><script type="module" data-cf-substrate src="/_b/v/latest/entry.js"></script>
 		<script>
-			window.redwood={"consentGroups":{"C0001":true,"C0002":true,"C0003":true,"C0004":true},"country":"US","colo":"SEA","user":null,"rv1":"tsk","locale":"en-US"}
+			window.redwood={"consentGroups":{"C0001":true,"C0002":true,"C0003":true,"C0004":true},"country":"US","colo":"MSP","user":null,"rv1":"tsk","locale":"en-US"}
 			window.redwood.syncOneTrustToZarazConsents = function() {
 				if(!window.zaraz?.consent) {
 					return;
@@ -411,7 +411,7 @@ const gtmContainerSrc = "https://www.googletagmanager.com/gtm.js?id=GTM-NDGPDFZ"
 			};
 		</script>
     <script type="text/javascript">
-      var OneTrust={"geolocationResponse":{"stateCode":"WA","countryCode":"US"}}
+      var OneTrust={"geolocationResponse":{"stateCode":"IA","countryCode":"US"}}
     </script>
     <script>
      const acceptedLocales = [
