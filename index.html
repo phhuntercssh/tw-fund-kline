@@ -12,15 +12,18 @@
     button { background: #2962ff; border: none; color: white; cursor: pointer; font-weight: bold; }
     button:hover { background: #1e53e5; }
     .chart-title { font-size: 15px; font-weight: bold; margin: 12px 0 6px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-    .chart-box { width: 100%; border-radius: 8px; overflow: hidden; }
+    .chart-box { width: 100%; border-radius: 8px; overflow: hidden; background: #1e222d; }
     #kline-chart { height: 340px; }
     #compare-chart { height: 300px; }
     #spread-chart { height: 300px; }
     .legend { font-size: 13px; display: flex; gap: 14px; flex-wrap: wrap; }
     .note { font-size: 12px; color: #787b86; }
+    #statusBanner { display: none; background: #3b2322; color: #ff8a80; border: 1px solid #ef5350; padding: 12px 16px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
   </style>
 </head>
 <body>
+
+<div id="statusBanner"></div>
 
 <div class="toolbar">
   <label>選擇基金：
@@ -78,7 +81,13 @@ let klineChart, candleSeries, compareChart, spreadChart;
 let lineSeriesMap = {};
 let spreadSeriesMap = {};
 
-document.getElementById('endDate').value = new Date().toISOString().split('T')[0];
+document.getElementById('endDate').value = new Date().toISOString().split('T').at(0);
+
+function showError(msg) {
+  const banner = document.getElementById('statusBanner');
+  banner.style.display = 'block';
+  banner.innerHTML = msg;
+}
 
 function initCharts() {
   const commonOptions = {
@@ -88,7 +97,6 @@ function initCharts() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
 
-  // 1. K線圖
   klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), commonOptions);
   candleSeries = klineChart.addCandlestickSeries({
     upColor: '#ef5350', downColor: '#26a69a',
@@ -96,7 +104,6 @@ function initCharts() {
     wickUpColor: '#ef5350', wickDownColor: '#26a69a'
   });
 
-  // 2. 累計漲跌幅對比圖
   compareChart = LightweightCharts.createChart(document.getElementById('compare-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(2) + '%' }
@@ -106,20 +113,18 @@ function initCharts() {
     lineSeriesMap[key] = compareChart.addLineSeries({ color, lineWidth: key === 'fund' ? 3 : 2 });
   }
 
-  // 3. 超額報酬差值圖 (基金漲跌幅 - 基準漲跌幅)
   spreadChart = LightweightCharts.createChart(document.getElementById('spread-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) + '%' }
   });
   const spreadColors = {
-    'diff_twii': '#4caf50',   // 基金 - 大盤
-    'diff_2330': '#ab47bc',   // 基金 - 台積電
-    'diff_00935': '#ffd54f'   // 基金 - 00935
+    'diff_twii': '#4caf50',
+    'diff_2330': '#ab47bc',
+    'diff_00935': '#ffd54f'
   };
   for (const [key, color] of Object.entries(spreadColors)) {
     spreadSeriesMap[key] = spreadChart.addLineSeries({ color, lineWidth: 2 });
   }
-  // 加入 0% 零軸基準線
   spreadSeriesMap['diff_twii'].createPriceLine({
     price: 0,
     color: '#787b86',
@@ -129,7 +134,6 @@ function initCharts() {
     title: '0% 基準'
   });
 
-  // 三張圖表時間軸同步縮放與平移
   const charts = [klineChart, compareChart, spreadChart];
   charts.forEach((sourceChart, idx) => {
     sourceChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
@@ -146,8 +150,9 @@ function initCharts() {
 function aggregateOHLC(entries, timeframe) {
   const dailyCandles = [];
   for (let i = 0; i < entries.length; i++) {
-    const [date, close] = entries[i];
-    const open = i === 0 ? close : entries[i - 1][1];
+    const date = entries.at(i).at(0);
+    const close = entries.at(i).at(1);
+    const open = i === 0 ? close : entries.at(i - 1).at(1);
     dailyCandles.push({
       time: date,
       open: open,
@@ -168,7 +173,7 @@ function aggregateOHLC(entries, timeframe) {
       const day = d.getDay();
       const diff = d.getDate() - day + (day === 0 ? -6 : 1);
       const monday = new Date(d.setDate(diff));
-      key = monday.toISOString().split('T')[0];
+      key = monday.toISOString().split('T').at(0);
     }
     if (!grouped[key]) {
       grouped[key] = { time: c.time, open: c.open, high: c.high, low: c.low, close: c.close };
@@ -185,21 +190,19 @@ function aggregateOHLC(entries, timeframe) {
 function toPctSeries(dict, start, end) {
   const filtered = Object.entries(dict)
     .filter(([d]) => d >= start && d <= end)
-    .sort((a, b) => a[0].localeCompare(b[0]));
+    .sort((a, b) => a.at(0).localeCompare(b.at(0)));
   if (filtered.length === 0) return [];
-  const base = filtered[0][1];
+  const base = filtered.at(0).at(1);
   return filtered.map(([d, v]) => ({ time: d, value: ((v - base) / base) * 100 }));
 }
 
-// 計算「基金累計漲跌幅 - 對照標的累計漲跌幅」
-// 注意：以兩者共同存在的「第一個交易日」作為 0% 起算點，避免 00935 (2023/11上市) 基準日錯位
 function toSpreadSeries(fundDict, benchDict, start, end) {
   const commonDates = Object.keys(fundDict)
     .filter(d => d >= start && d <= end && benchDict[d] !== undefined)
     .sort((a, b) => a.localeCompare(b));
   if (commonDates.length === 0) return [];
-  const fundBase = fundDict[commonDates[0]];
-  const benchBase = benchDict[commonDates[0]];
+  const fundBase = fundDict[commonDates.at(0)];
+  const benchBase = benchDict[commonDates.at(0)];
   return commonDates.map(d => {
     const fundPct = ((fundDict[d] - fundBase) / fundBase) * 100;
     const benchPct = ((benchDict[d] - benchBase) / benchBase) * 100;
@@ -219,17 +222,15 @@ function renderAll() {
   const fundDict = rawData.funds[fundName] || {};
   const filteredEntries = Object.entries(fundDict)
     .filter(([d]) => d >= start && d <= end)
-    .sort((a, b) => a[0].localeCompare(b[0]));
+    .sort((a, b) => a.at(0).localeCompare(b.at(0)));
 
   candleSeries.setData(aggregateOHLC(filteredEntries, tf));
 
-  // 更新累計漲跌幅折線
   lineSeriesMap['fund'].setData(toPctSeries(fundDict, start, end));
   for (const bName of ['加權指數', '台積電(2330)', '00935']) {
     lineSeriesMap[bName].setData(toPctSeries(rawData.benchmarks[bName] || {}, start, end));
   }
 
-  // 更新三項超額報酬差值折線
   spreadSeriesMap['diff_twii'].setData(toSpreadSeries(fundDict, rawData.benchmarks['加權指數'] || {}, start, end));
   spreadSeriesMap['diff_2330'].setData(toSpreadSeries(fundDict, rawData.benchmarks['台積電(2330)'] || {}, start, end));
   spreadSeriesMap['diff_00935'].setData(toSpreadSeries(fundDict, rawData.benchmarks['00935'] || {}, start, end));
@@ -241,10 +242,18 @@ function renderAll() {
 
 async function boot() {
   initCharts();
-  const res = await fetch('./data.json?t=' + Date.now());
-  rawData = await res.json();
-  document.getElementById('updateTime').innerText = '最後更新：' + rawData.updated_at;
-  renderAll();
+  try {
+    const res = await fetch('./data.json?t=' + Date.now());
+    if (!res.ok) {
+      showError('⚠️ 尚未找到 <b>data.json</b> 資料檔！請先到 GitHub 倉庫的 <b>Actions</b> 分頁手動執行一次 <b>Run workflow</b> 產生數據，再重新整理此網頁。');
+      return;
+    }
+    rawData = await res.json();
+    document.getElementById('updateTime').innerText = '最後更新：' + rawData.updated_at;
+    renderAll();
+  } catch (err) {
+    showError('⚠️ 載入資料發生錯誤：' + err.message);
+  }
 }
 
 boot();
