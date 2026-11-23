@@ -23,9 +23,8 @@ DATA_FILE = "data.json"
 
 BASE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "*/*",
     "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Connection": "keep-alive",
 }
 
 
@@ -34,131 +33,130 @@ def load_existing_data():
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
-            print(f"Warning: 無法讀取現有 {DATA_FILE} ({e})")
+        except Exception:
+            pass
     return {"funds": {}, "benchmarks": {}}
 
 
-def parse_recent_30_days(html):
-    """解析 yp010000.djhtm（MM/DD 格式）"""
-    clean_text = re.sub(r"<[^>]+>", " ", html)
-    pairs = re.findall(r"(?<!\d)(\d{2}/\d{2})(?!\d)\s+([\d,]+\.\d+)", clean_text)
+def parse_chart_or_table_data(text):
+    """同時支援解析：
+    1. 走勢圖純數據格式（日期列表與淨值列表以逗號/分號分隔，如 2010/01/04,2010/01/05...;12.34,12.45...）
+    2. 一般 HTML 表格格式（YYYY/MM/DD 緊跟淨值）
+    """
+    result = {}
 
-    today = datetime.date.today()
-    current_year = today.year
-    parsed = {}
+    # 模式 A：解析走勢圖專用純數據格式（通常包含兩組等長的日期與數值陣列）
+    dates_found = re.findall(r"\b(\d{4}/\d{2}/\d{2})\b", text)
+    if len(dates_found) > 100 and ";" in text:
+        parts = text.strip().split(";")
+        # 尋找日期區塊與緊鄰的淨值數值區塊
+        for i in range(len(parts) - 1):
+            d_list = re.findall(r"\d{4}/\d{2}/\d{2}", parts[i])
+            if len(d_list) > 100:
+                v_list = [x.strip() for x in parts[i + 1].split(",") if re.match(r"^[\d.]+$", x.strip())]
+                if len(d_list) == len(v_list):
+                    for d_raw, v_raw in zip(d_list, v_list):
+                        d_iso = d_raw.replace("/", "-")
+                        val = float(v_raw)
+                        if val > 0 and d_iso >= START_DATE:
+                            result[d_iso] = round(val, 4)
+                    if result:
+                        return result
 
-    for md_str, nav_raw in pairs:
-        month, day = map(int, md_str.split("/"))
-        year = current_year - 1 if (month - today.month) > 2 else current_year
-        try:
-            dt = datetime.date(year, month, day)
-            if dt > today + datetime.timedelta(days=5):
-                dt = datetime.date(year - 1, month, day)
-            d_iso = dt.strftime("%Y-%m-%d")
-            val = float(nav_raw.replace(",", ""))
-            if val > 0 and d_iso >= START_DATE:
-                parsed[d_iso] = round(val, 4)
-        except ValueError:
-            continue
+    # 模式 B：解析 HTML 表格中的 YYYY/MM/DD 與淨值
+    clean_text = re.sub(r"<[^>]+>", " ", text)
+    pairs = re.findall(r"(\d{4}/\d{2}/\d{2})\s+([\d,]+\.\d+)", clean_text)
+    for d_raw, nav_raw in pairs:
+        d_iso = d_raw.replace("/", "-")
+        val = float(nav_raw.replace(",", ""))
+        if val > 0 and d_iso >= START_DATE:
+            result[d_iso] = round(val, 4)
 
-    return parsed
+    return result
 
 
-def fetch_recent_fund_nav(session, fund_code):
-    """抓取近 30 日最新淨值（供 GitHub Actions 每日增量更新使用）"""
-    urls = [
-        f"https://moneydj.com{fund_code}",
-        f"https://hncb.com.tw_{fund_code}.djhtm",
+def fetch_full_history_via_chart_api(session, fund_code):
+    """透過 MoneyDJ 體系走勢圖歷史資料接口（一次回傳成立至今全部每日淨值）"""
+    today_slash = datetime.date.today().strftime("%Y/%m/%d")
+    start_slash = START_DATE.replace("-", "/")
+
+    # MoneyDJ 基金走勢圖資料接口（GET 與 POST 雙重嘗試）
+    chart_endpoints = [
+        # 1. MoneyDJ 主站走勢圖數據接口 (bcd)
+        ("GET", f"https://moneydj.com{fund_code}&b={start_slash}&c={today_slash}", None),
+        # 2. 銀行代銷鏡像站走勢圖數據接口 (djbcd)
+        ("GET", f"https://hncb.com.tw{fund_code}&b={start_slash}&c={today_slash}", None),
+        ("GET", f"https://moneydj.com{fund_code}&b={start_slash}&c={today_slash}", None),
+        ("GET", f"https://moneydj.com{fund_code}&b={start_slash}&c={today_slash}", None),
+        # 3. POST 表單方式送出歷史區間查詢 (wr02.djhtm)
+        ("POST", f"https://hncb.com.tw_{fund_code}.djhtm", {"a": fund_code, "b": start_slash, "c": today_slash}),
+        ("POST", f"https://moneydj.com{fund_code}", {"b": start_slash, "c": today_slash}),
     ]
-    headers = {**BASE_HEADERS, "Referer": f"https://moneydj.com{fund_code}"}
 
-    for url in urls:
+    for method, url, payload in chart_endpoints:
+        headers = {**BASE_HEADERS, "Referer": f"https://moneydj.com{fund_code}"}
         try:
-            resp = session.get(url, headers=headers, timeout=25)
+            if method == "GET":
+                resp = session.get(url, headers=headers, timeout=25)
+            else:
+                resp = session.post(url, data=payload, headers=headers, timeout=25)
+
             if resp.status_code == 200:
                 resp.encoding = "big5"
-                # 嘗試解析完整 YYYY/MM/DD 格式
-                clean_text = re.sub(r"<[^>]+>", " ", resp.text)
-                full_pairs = re.findall(r"(\d{4}/\d{2}/\d{2})\s+([\d,]+\.\d+)", clean_text)
-                if full_pairs:
-                    res = {}
-                    for d_raw, nav_raw in full_pairs:
-                        d_iso = d_raw.replace("/", "-")
-                        val = float(nav_raw.replace(",", ""))
-                        if val > 0 and d_iso >= START_DATE:
-                            res[d_iso] = round(val, 4)
-                    if res:
-                        return res
-
-                # 若為 MM/DD 格式則用近 30 日解析器
-                recent = parse_recent_30_days(resp.text)
-                if recent:
-                    return recent
+                parsed = parse_chart_or_table_data(resp.text)
+                if len(parsed) > 100:
+                    print(f"  -> 成功透過 {url.split('/')[2]} 取得 {len(parsed)} 筆歷史淨值")
+                    return parsed
         except Exception:
             continue
+
     return {}
 
 
-def fetch_full_history_by_year(session, fund_code, start_year):
-    """逐年向支援日期區間參數(b, c)的鏡像站點抓取 2010-01-04 至今完整歷史淨值"""
-    current_year = datetime.date.today().year
-    all_records = {}
-
-    # 支援 b=YYYY-MM-DD & c=YYYY-MM-DD 區間查詢的多個 MoneyDJ 體系靜態接口
-    mirror_templates = [
-        "https://moneydj.com{code}&b={b}&c={c}",
-        "https://hncb.com.tw.djhtm?a={code}&b={b}&c={c}",
-        "https://moneydj.com{code}&b={b}&c={c}",
-        "https://moneydj.com{code}&b={b}&c={c}",
-    ]
-
-    for yr in range(start_year, current_year + 1):
-        b_date = START_DATE if yr == start_year else f"{yr}-01-01"
-        c_date = f"{yr}-12-31"
-        yr_count = 0
-
-        for tmpl in mirror_templates:
-            url = tmpl.format(code=fund_code, b=b_date, c=c_date)
-            headers = {**BASE_HEADERS, "Referer": url}
-            try:
-                resp = session.get(url, headers=headers, timeout=25)
-                if resp.status_code == 200:
-                    resp.encoding = "big5"
-                    clean_text = re.sub(r"<[^>]+>", " ", resp.text)
-                    pairs = re.findall(r"(\d{4}/\d{2}/\d{2})\s+([\d,]+\.\d+)", clean_text)
-                    for d_raw, nav_raw in pairs:
-                        d_iso = d_raw.replace("/", "-")
-                        val = float(nav_raw.replace(",", ""))
-                        if val > 0 and d_iso >= START_DATE:
-                            all_records[d_iso] = round(val, 4)
-                            yr_count += 1
-                    if yr_count > 0:
-                        break  # 該年份成功抓到資料就跳出鏡像迴圈，進入下一年
-            except Exception:
-                continue
-
-        print(f"    - {yr} 年: 取得 {yr_count} 筆")
-        time.sleep(0.5)
-
-    return all_records
+def fetch_recent_30_days(session, fund_code):
+    """抓取近 30 日最新淨值（MM/DD 格式）"""
+    url = f"https://moneydj.com{fund_code}"
+    headers = {**BASE_HEADERS, "Referer": url}
+    try:
+        resp = session.get(url, headers=headers, timeout=20)
+        if resp.status_code == 200:
+            resp.encoding = "big5"
+            clean_text = re.sub(r"<[^>]+>", " ", resp.text)
+            pairs = re.findall(r"(?<!\d)(\d{2}/\d{2})(?!\d)\s+([\d,]+\.\d+)", clean_text)
+            today = datetime.date.today()
+            parsed = {}
+            for md_str, nav_raw in pairs:
+                month, day = map(int, md_str.split("/"))
+                year = today.year - 1 if (month - today.month) > 2 else today.year
+                try:
+                    dt = datetime.date(year, month, day)
+                    if dt > today + datetime.timedelta(days=5):
+                        dt = datetime.date(year - 1, month, day)
+                    d_iso = dt.strftime("%Y-%m-%d")
+                    val = float(nav_raw.replace(",", ""))
+                    if val > 0 and d_iso >= START_DATE:
+                        parsed[d_iso] = round(val, 4)
+                except ValueError:
+                    continue
+            return parsed
+    except Exception:
+        pass
+    return {}
 
 
 def update_fund(session, fund_code, existing_records):
     merged = dict(existing_records)
-    # 修正原本缺少 [0] 的 bug，正確取得起始年份 2010
-    start_year = int(START_DATE.split("-")[0])
-
-    # 檢查現有資料最早日期是否已涵蓋 2010 年；若無或總筆數不足 1000 筆，強制執行完整歷史回溯
     earliest_date = min(merged.keys()) if merged else "9999-12-31"
+
+    # 若尚未取得 2010 年起的完整歷史，呼叫走勢圖數據接口 (BCDNavList.djbcd) 一次拉回全部歷史
     if earliest_date > "2010-02-01" or len(merged) < 1000:
-        print(f"  -> 現有資料最早僅至 {earliest_date}，開始回溯 {START_DATE} 至今完整歷史...")
-        full_data = fetch_full_history_by_year(session, fund_code, start_year)
+        print(f"  -> 目前最早僅至 {earliest_date}，嘗試從走勢圖接口拉取 {START_DATE} 至今完整歷史...")
+        full_data = fetch_full_history_via_chart_api(session, fund_code)
         merged.update(full_data)
 
-    # 補上最近 30 日最新淨值
-    recent_data = fetch_recent_fund_nav(session, fund_code)
-    merged.update(recent_data)
+    # 再用近 30 日靜態表補上最新交易日淨值
+    recent = fetch_recent_30_days(session, fund_code)
+    merged.update(recent)
 
     return dict(sorted(merged.items()))
 
