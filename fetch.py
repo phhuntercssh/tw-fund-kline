@@ -20,11 +20,7 @@ START_DATE = "2010-01-01"
 def fetch_fund_history(fund_code):
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     url = "https://moneydj.com"
-    params = {
-        "a": fund_code,
-        "b": START_DATE,
-        "c": today_str
-    }
+    params = {"a": fund_code, "b": START_DATE, "c": today_str}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://moneydj.com"
@@ -36,8 +32,8 @@ def fetch_fund_history(fund_code):
     if len(parts) < 2:
         raise ValueError(f"Unexpected response format for {fund_code}: {resp.text[:100]}")
 
-    dates = parts[0].split(",")
-    navs = parts[1].split(",")
+    dates = parts.pop(0).split(",")
+    navs = parts.pop(0).split(",")
 
     result = {}
     for d, n in zip(dates, navs):
