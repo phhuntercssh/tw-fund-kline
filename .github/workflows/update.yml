@@ -16,6 +16,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Download Lightweight Charts locally
+        run: |
+          if [ ! -f lightweight-charts.js ]; then
+            curl -L "https://unpkg.com" -o lightweight-charts.js
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -29,11 +35,11 @@ jobs:
 
       - name: Commit and push updated data
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.email "github-actions[bot]@://github.com"
           git config --local user.name "github-actions[bot]"
-          git add data.json
+          git add data.json lightweight-charts.js
           if ! git diff --quiet --staged; then
-            git commit -m "Update fund data $(date +'%Y-%m-%d')"
+            git commit -m "Update fund data and chart library $(date +'%Y-%m-%d')"
             git pull --rebase origin main
             git push
           fi
