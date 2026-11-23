@@ -3,9 +3,9 @@ import datetime
 import yfinance as yf
 
 FUNDS = {
-    "野村台灣運籌": "F0HKG05WZB.TW",
-    "野村優質(累積)": "F0HKG05X20.TW",
-    "施羅德台灣樂活A": "F000000LO1.TW"
+    "野村台灣運籌": ["0P00006B0B.TW", "野村台灣運籌"],
+    "野村優質(累積)": ["0P00006AYX.TW", "野村優質"],
+    "施羅德台灣樂活A": ["0P0000J0Y4.TW", "施羅德台灣樂活"]
 }
 
 BENCHMARKS = {
@@ -16,7 +16,7 @@ BENCHMARKS = {
 
 START_DATE = "2010-01-01"
 
-def fetch_yf_history(ticker, decimals=2):
+def download_series(ticker, decimals=4):
     df = yf.download(ticker, start=START_DATE, progress=False, auto_adjust=True)
     result = {}
     if df.empty:
@@ -30,6 +30,22 @@ def fetch_yf_history(ticker, decimals=2):
             result[date_str] = round(float(val), decimals)
     return result
 
+def fetch_fund_smart(primary_ticker, keyword):
+    # 1. 優先嘗試精確的 0P0000...TW 代號
+    data = download_series(primary_ticker, decimals=4)
+    if len(data) > 0:
+        return primary_ticker, data
+
+    # 2. 若無資料則自動向 Yahoo Finance 搜尋該基金代號
+    search = yf.Search(keyword, max_results=5)
+    for q in getattr(search, "quotes", []):
+        sym = q.get("symbol", "")
+        if sym.endswith(".TW"):
+            data = download_series(sym, decimals=4)
+            if len(data) > 0:
+                return sym, data
+    return primary_ticker, {}
+
 def main():
     output = {
         "updated_at": (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S CST"),
@@ -37,14 +53,15 @@ def main():
         "benchmarks": {}
     }
 
-    for name, ticker in FUNDS.items():
+    for name, (ticker, keyword) in FUNDS.items():
         print(f"Fetching fund: {name} ({ticker})...")
-        output["funds"][name] = fetch_yf_history(ticker, decimals=4)
-        print(f"  -> {name} fetched {len(output['funds'][name])} records.")
+        used_ticker, records = fetch_fund_smart(ticker, keyword)
+        output["funds"][name] = records
+        print(f"  -> {name} [{used_ticker}] fetched {len(records)} records.")
 
     for name, ticker in BENCHMARKS.items():
         print(f"Fetching benchmark: {name} ({ticker})...")
-        output["benchmarks"][name] = fetch_yf_history(ticker, decimals=2)
+        output["benchmarks"][name] = download_series(ticker, decimals=2)
         print(f"  -> {name} fetched {len(output['benchmarks'][name])} records.")
 
     with open("data.json", "w", encoding="utf-8") as f:
