@@ -187,88 +187,65 @@ def fetch_sitca_month(session, corp_id, year, month, target_isins):
 
 
 
-def fetch_mdj_post_range(session, mdj_id, start_dt, end_dt):
-    """來源 3：MoneyDJ 網頁歷史區間表單 POST 查詢"""
-    url = build_url("https://moneydj.com", ["funddj", "ya", "yp010000.djhtm"], f"a={mdj_id}")
-    form_data = {
-        "a": mdj_id,
-        "b": start_dt.strftime("%Y/%m/%d"),
-        "c": end_dt.strftime("%Y/%m/%d"),
-    }
-    parsed = {}
-    try:
-        resp = session.post(url, data=form_data, headers={**HEADERS, "Referer": url}, timeout=20)
-        if resp.status_code == 200:
-            resp.encoding = "big5"
-            clean_text = re.sub(r"<[^>]+>", " ", resp.text)
-            pairs = re.findall(r"(\d{4}/\d{2}/\d{2})\s+([\d,]+\.\d+)", clean_text)
-            for d_raw, nav_raw in pairs:
-                d_iso = d_raw.replace("/", "-")
-                val = float(nav_raw.replace(",", ""))
-                if val > 0 and start_dt.strftime("%Y-%m-%d") <= d_iso <= end_dt.strftime("%Y-%m-%d") and d_iso >= START_DATE:
-                    parsed[d_iso] = round(val, 4)
-    except Exception as e:
-        print(f"    [MDJ_POST異常 {start_dt}~{end_dt}] {e}")
-    return parsed
+def backfill_by_corp_month(session, corp_id, corp_funds_map, max_months=24):
+    """
+    以投信公司為單位，逐月往回查詢投信投顧公會 (SITCA) 歷史淨值，
+    單次執行最多往回抓 24 個月（2 年），搭配每 5 分鐘排程可無痛補滿至 2010 年。
+    """
+    target_ym = (2010, 1)
+    earliest_dates = []
+    for f_name, records in corp_funds_map.items():
+        if records:
+            earliest_dates.append(min(records.keys()))
+        else:
+            earliest_dates.append(datetime.date.today().strftime("%Y-%m-%d"))
 
+    # 從所有同投信基金中「最晚的那個最早日期」開始往回補
+    cursor_str = max(earliest_dates)
+    cursor_dt = datetime.date.fromisoformat(cursor_str)
+    cur_year, cur_month = cursor_dt.year, cursor_dt.month
 
-def backfill_history(session, info, merged_records, window_days=365, max_batches=25):
-    """以現有最早日期為基準點，每次往前推一個視窗批次抓取，直到 2010-01-04"""
-    target_start = datetime.date.fromisoformat(START_DATE)
-    earliest_str = min(merged_records.keys()) if merged_records else datetime.date.today().strftime("%Y-%m-%d")
-    cursor_end = datetime.date.fromisoformat(earliest_str) - datetime.timedelta(days=1)
+    # 往回推 1 個月作為起始查詢月
+    if cur_month == 1:
+        cur_year -= 1
+        cur_month = 12
+    else:
+        cur_month -= 1
 
-    batch_count = 0
+    isin_to_name = {FUNDS[f_name]["isin"]: f_name for f_name in corp_funds_map}
+    target_isins = list(isin_to_name.keys())
+
+    month_count = 0
     empty_streak = 0
 
-    while cursor_end >= target_start and batch_count < max_batches:
-        cursor_start = max(target_start, cursor_end - datetime.timedelta(days=window_days))
-        batch_count += 1
+    while (cur_year, cur_month) >= target_ym and month_count < max_months:
+        month_data_map = fetch_sitca_month(session, corp_id, cur_year, cur_month, target_isins)
+        month_count += 1
 
-        # 依序嘗試三種資料源
-        batch_data = fetch_yahoo_tw_range(session, info["yahoo_fo"], cursor_start, cursor_end)
-        source_tag = "YahooTW"
+        total_added = 0
+        for isin, rows in month_data_map.items():
+            if rows:
+                f_name = isin_to_name[isin]
+                corp_funds_map[f_name].update(rows)
+                total_added += len(rows)
 
-        if not batch_data:
-            batch_data = fetch_yahoo_global_range(session, info["yahoo_fo"], cursor_start, cursor_end)
-            source_tag = "YahooGlobal"
-
-        if not batch_data:
-            batch_data = fetch_mdj_post_range(session, info["mdj_id"], cursor_start, cursor_end)
-            source_tag = "MDJ_POST"
-
-        if batch_data:
-            merged_records.update(batch_data)
+        if total_added > 0:
             empty_streak = 0
-            print(f"    [批次 {batch_count}][{source_tag}] {cursor_start} ~ {cursor_end}：補齊 {len(batch_data)} 筆")
+            print(f"    [SITCA {corp_id}][{cur_year}-{cur_month:02d}] 補齊共 {total_added} 筆淨值")
         else:
             empty_streak += 1
-            print(f"    [批次 {batch_count}] {cursor_start} ~ {cursor_end}：三源皆無資料（連續 {empty_streak} 次）")
-            if empty_streak >= 3:
-                print(f"    -> 連續 3 個區間無資料，停止往回回補。")
+            print(f"    [SITCA {corp_id}][{cur_year}-{cur_month:02d}] 無資料（連續 {empty_streak} 個月）")
+            if empty_streak >= 4:
+                print(f"    -> 連續 4 個月無資料，停止往回回補。")
                 break
 
-        cursor_end = cursor_start - datetime.timedelta(days=1)
-        time.sleep(0.5)
+        if cur_month == 1:
+            cur_year -= 1
+            cur_month = 12
+        else:
+            cur_month -= 1
 
-    return merged_records
-
-
-def update_fund(session, fund_name, info, existing_records):
-    merged = dict(existing_records)
-
-    # 1. 抓最新近 30 日淨值
-    recent = fetch_mdj_recent_30(session, info["mdj_id"])
-    print(f"  -> 最新近30日取得: {len(recent)} 筆")
-    merged.update(recent)
-
-    # 2. 若最早日期尚未達 2010-01-04，啟動滑動視窗往回回補
-    earliest_date = min(merged.keys()) if merged else "9999-12-31"
-    if earliest_date > START_DATE:
-        print(f"  -> 目前最早資料為 {earliest_date}，啟動滑動視窗往回回補...")
-        merged = backfill_history(session, info, merged, window_days=365, max_batches=25)
-
-    return dict(sorted(merged.items()))
+        time.sleep(0.8)
 
 
 def fetch_benchmark_history(ticker):
@@ -303,19 +280,40 @@ def main():
 
     session = requests.Session()
 
+    # 1. 先載入舊資料並抓最新近 30 日淨值
+    merged_all = {}
     for name, info in FUNDS.items():
-        print(f"Fetching fund: {name}...")
-        prev_records = existing_funds.get(name, {})
-        output["funds"][name] = update_fund(session, name, info, prev_records)
-        dates = list(output["funds"][name].keys())
+        print(f"Updating recent 30d: {name}...")
+        records = dict(existing_funds.get(name, {}))
+        recent = fetch_mdj_recent_30(session, info["mdj_id"])
+        print(f"  -> MoneyDJ 近30日取得: {len(recent)} 筆")
+        records.update(recent)
+        merged_all[name] = records
+
+    # 2. 依投信公司分組，啟動 SITCA 逐月往回回補至 2010-01
+    corps = {}
+    for name, info in FUNDS.items():
+        corp_id = info["sitca_corp"]
+        corps.setdefault(corp_id, {})[name] = merged_all[name]
+
+    for corp_id, corp_funds_map in corps.items():
+        earliest_in_corp = max(min(r.keys()) if r else "9999-12-31" for r in corp_funds_map.values())
+        if earliest_in_corp > START_DATE:
+            print(f"Backfilling SITCA corp {corp_id} (目前最早至 {earliest_in_corp})...")
+            backfill_by_corp_month(session, corp_id, corp_funds_map, max_months=24)
+
+    for name in FUNDS:
+        sorted_records = dict(sorted(merged_all[name].items()))
+        output["funds"][name] = sorted_records
+        dates = list(sorted_records.keys())
         if dates:
             first_d = next(iter(dates))
             last_d = dates[-1]
             print(f"  -> {name} 最終總筆數: {len(dates)} 筆 ({first_d} ~ {last_d})")
         else:
             print(f"  -> {name} 最終總筆數: 0 筆")
-        time.sleep(0.5)
 
+    # 3. 更新大盤與 ETF 基準指標
     for name, ticker in BENCHMARKS.items():
         print(f"Fetching benchmark: {name} ({ticker})...")
         fetched = fetch_benchmark_history(ticker)
@@ -324,6 +322,11 @@ def main():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
     print("Successfully updated data.json!")
+
+
+if __name__ == "__main__":
+    main()
+
 
 
 if __name__ == "__main__":
