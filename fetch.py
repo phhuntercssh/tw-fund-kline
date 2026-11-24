@@ -112,7 +112,7 @@ def fetch_sitca_month(session, corp_id, year, month, target_isins):
     自動解析網頁下拉選單的實際選項值（支援西元/民國年與各種選項格式）。
     """
     global _SITCA_DEBUG_PRINTED
-    url = build_url("https://sitca.org.tw", ["ROC", "Industry", "IN2106.aspx"], "pid=IN2213_02")
+    url = build_url("https://www." + "sitca.org.tw", ["ROC", "Industry", "IN2106.aspx"], "pid=IN2213_02")
     results_by_isin = {isin: {} for isin in target_isins}
 
     try:
