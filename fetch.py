@@ -108,10 +108,22 @@ def init_sitca_session(session):
     return url, parse_aspnet_hidden(r_get.text)
 
 
+
+_SITCA_ROW_DEBUG = False
+
 def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, target_isins):
-    """查詢 SITCA 指定投信在單一日期 (YYYYMMDD) 的淨值，並自動更新隱藏狀態"""
+    """查詢 SITCA 指定投信在單一日期 (YYYYMMDD) 的淨值，同時支援 ISIN 與基金中文名稱比對"""
+    global _SITCA_ROW_DEBUG
     d_compact = target_dt.strftime("%Y%m%d")
     d_iso = target_dt.strftime("%Y-%m-%d")
+
+    # 建立對照關鍵字（ISIN 碼 + 基金核心簡稱）
+    keyword_to_isin = {}
+    for isin in target_isins:
+        keyword_to_isin[isin] = isin
+    keyword_to_isin["台灣運籌"] = "TW000T3218Y2"
+    keyword_to_isin["野村優質"] = "TW000T3201Y8"
+    keyword_to_isin["台灣樂活"] = "TW000T4209Y0"
 
     post_data = dict(hidden_fields)
     post_data["ctl00$ContentPlaceHolder1$txtQ_Date"] = d_compact
@@ -125,16 +137,29 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, targ
             return found_navs, hidden_fields
         r_post.encoding = "utf-8"
 
-        # 更新下一次 POST 所需的最新 __VIEWSTATE
         new_hidden = parse_aspnet_hidden(r_post.text)
         if new_hidden:
             hidden_fields = new_hidden
 
         rows = re.findall(r"<tr[^>]*>(.*?)</tr>", r_post.text, re.S | re.I)
+
+        if not _SITCA_ROW_DEBUG:
+            sample_rows = [
+                [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.S | re.I)]
+                for r in rows if ("野村" in r or "運籌" in r or "施羅德" in r or "ISIN" in r)
+            ]
+            print(f"    [SITCA回傳表格診斷 {d_iso}] 總列數={len(rows)}, 相關列前3筆={sample_rows[:3]}")
+            _SITCA_ROW_DEBUG = True
+
         for row_html in rows:
             matched_isin = None
-            for isin in target_isins:
-                if isin in row_html:
+            for kw, isin in keyword_to_isin.items():
+                if kw in row_html:
+                    # 排除野村優質(配息)等其他級別，確保抓到累積型
+                    if kw == "野村優質" and ("配息" in row_html or "S類型" in row_html or "N類型" in row_html):
+                        continue
+                    if kw == "台灣樂活" and ("B" in row_html or "配息" in row_html or "N" in row_html):
+                        continue
                     matched_isin = isin
                     break
             if not matched_isin:
@@ -154,6 +179,7 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, targ
         print(f"    [SITCA單日異常 {corp_id} {d_iso}] {e}")
 
     return found_navs, hidden_fields
+
 
 
 
