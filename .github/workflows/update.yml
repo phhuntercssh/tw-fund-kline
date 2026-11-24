@@ -2,11 +2,18 @@ name: Daily Fund NAV Update at 8PM CST
 
 on:
   schedule:
-    - cron: '0 12 * * 1-5'
+    # 暫時改為每 5 分鐘執行一次，快速自動回補至 2010 年
+    # （資料補滿後，請改回原本的 '0 12 * * 1-5' 每日晚上 8 點更新）
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: write
+
+# 防止前一次回補還沒跑完，5 分鐘後又啟動新任務造成衝突
+concurrency:
+  group: daily-fund-nav-update
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -35,7 +42,7 @@ jobs:
 
       - name: Commit and push updated data
         run: |
-          git config --local user.email "github-actions[bot]@://github.com"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add data.json lightweight-charts.js .nojekyll
           if ! git diff --quiet --staged; then
