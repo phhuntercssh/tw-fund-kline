@@ -132,50 +132,81 @@ def fetch_anuefund_history(session, anue_id):
     return {}
 
 
-def fetch_mdj_recent_30(session, mdj_id):
-    """增量更新：抓取 MoneyDJ 近 30 日最新淨值"""
-    url = build_url("https://moneydj.com", ["funddj", "ya", "yp010000.djhtm"], f"a={mdj_id}")
+def fetch_mdj_range(session, mdj_id, start_dt, end_dt):
+    """指定日期區間抓取 MoneyDJ 歷史淨值（支援 30 天視窗滑動回補）"""
+    # MoneyDJ 歷史區間查詢頁：yp010001.djhtm，b=起始日(YYYY/MM/DD), e=結束日(YYYY/MM/DD)
+    url = build_url(
+        "https://www.moneydj.com",
+        ["funddj", "ya", "yp010001.djhtm"],
+        f"a={mdj_id}&b={start_dt.strftime('%Y/%m/%d')}&e={end_dt.strftime('%Y/%m/%d')}"
+    )
+    parsed = {}
     try:
         resp = session.get(url, headers=HEADERS, timeout=20)
         if resp.status_code == 200:
             resp.encoding = "big5"
             clean_text = re.sub(r"<[^>]+>", " ", resp.text)
-            pairs = re.findall(r"(?<!\d)(\d{2}/\d{2})(?!\d)\s+([\d,]+\.\d+)", clean_text)
-            today = datetime.date.today()
-            parsed = {}
-            for md_str, nav_raw in pairs:
-                month, day = map(int, md_str.split("/"))
-                year = today.year - 1 if (month - today.month) > 2 else today.year
-                try:
-                    dt = datetime.date(year, month, day)
-                    if dt > today + datetime.timedelta(days=5):
-                        dt = datetime.date(year - 1, month, day)
-                    d_iso = dt.strftime("%Y-%m-%d")
-                    val = float(nav_raw.replace(",", ""))
-                    if val > 0 and d_iso >= START_DATE:
-                        parsed[d_iso] = round(val, 4)
-                except ValueError:
-                    continue
-            return parsed
+            # 歷史查詢頁面日期格式通常為 YYYY/MM/DD 或 YY/MM/DD
+            pairs = re.findall(r"(\d{4}/\d{2}/\d{2})\s+([\d,]+\.\d+)", clean_text)
+            for d_raw, nav_raw in pairs:
+                d_iso = d_raw.replace("/", "-")
+                val = float(nav_raw.replace(",", ""))
+                if val > 0 and d_iso >= START_DATE:
+                    parsed[d_iso] = round(val, 4)
     except Exception as e:
-        print(f"    [MDJ近30日異常] {e}")
-    return {}
+        print(f"    [MDJ區間查詢異常 {start_dt}~{end_dt}] {e}")
+    return parsed
+
+
+def backfill_by_30_days(session, mdj_id, merged_records, max_batches=30):
+    """
+    以現有最早日期為基準點，每次往前推 30 天批次抓取，直到 2010-01-01
+    max_batches=30 代表單次執行最多往回抓 30 批（約 900 天＝2.5 年），
+    避免單次 GitHub Actions 跑太久，多跑幾次就會自動補滿至 2010/01/01。
+    """
+    target_start = datetime.date.fromisoformat(START_DATE)
+    earliest_str = min(merged_records.keys()) if merged_records else datetime.date.today().strftime("%Y-%m-%d")
+    cursor_end = datetime.date.fromisoformat(earliest_str) - datetime.timedelta(days=1)
+
+    batch_count = 0
+    empty_streak = 0  # 連續無資料次數（防呆：若基金成立晚於 2010 年，避免無效空轉）
+
+    while cursor_end >= target_start and batch_count < max_batches:
+        cursor_start = max(target_start, cursor_end - datetime.timedelta(days=30))
+        batch_data = fetch_mdj_range(session, mdj_id, cursor_start, cursor_end)
+        batch_count += 1
+
+        if batch_data:
+            merged_records.update(batch_data)
+            empty_streak = 0
+            print(f"    [批次 {batch_count}] {cursor_start} ~ {cursor_end}：補齊 {len(batch_data)} 筆")
+        else:
+            empty_streak += 1
+            print(f"    [批次 {batch_count}] {cursor_start} ~ {cursor_end}：無交易資料（連續 {empty_streak} 次）")
+            # 若連續 6 個月（6 批）完全沒淨值，代表已觸及該基金成立日，提前結束迴圈
+            if empty_streak >= 6:
+                print(f"    -> 已達該基金最早成立日附近，停止往回回補。")
+                break
+
+        cursor_end = cursor_start - datetime.timedelta(days=1)
+        time.sleep(0.8)  # 禮貌性延遲，避免觸發網站防爬蟲封鎖
+
+    return merged_records
 
 
 def update_fund(session, fund_name, info, existing_records):
     merged = dict(existing_records)
-    earliest_date = min(merged.keys()) if merged else "9999-12-31"
 
-    if earliest_date > "2010-02-01" or len(merged) < 1000:
-        print(f"  -> 目前最早僅至 {earliest_date}，拉取 {START_DATE} 至今完整歷史...")
-        hist = fetch_yahoo_tw_chart(session, info["yahoo_fo"])
-        if len(hist) < 100:
-            hist = fetch_anuefund_history(session, info["anue_id"])
-        merged.update(hist)
-
+    # 1. 先抓最新近 30 日淨值（確保最新交易日永遠是最新的）
     recent = fetch_mdj_recent_30(session, info["mdj_id"])
-    print(f"  -> MoneyDJ 近30日取得: {len(recent)} 筆")
+    print(f"  -> 最新近30日取得: {len(recent)} 筆")
     merged.update(recent)
+
+    # 2. 檢查最早日期是否已達 2010-01-04，若還沒補滿，就以最早日期為基準往前每次推 30 天批次補齊
+    earliest_date = min(merged.keys()) if merged else "9999-12-31"
+    if earliest_date > START_DATE:
+        print(f"  -> 目前最早資料為 {earliest_date}，啟動 30 天滑動視窗往回回補...")
+        merged = backfill_by_30_days(session, info["mdj_id"], merged, max_batches=30)
 
     return dict(sorted(merged.items()))
 
