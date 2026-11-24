@@ -44,7 +44,6 @@ HEADERS = {
 
 
 def build_url(scheme_host, path_parts, query=""):
-    """用陣列組合網址，避免複製貼上到 GitHub 網頁時遺失斜線"""
     url = scheme_host.rstrip("/") + "/" + "/".join(path_parts)
     if query:
         url += "?" + query
@@ -63,7 +62,7 @@ def load_existing_data():
 
 def fetch_mdj_recent_30(session, mdj_id):
     """增量更新：抓取 MoneyDJ 近 30 日最新淨值"""
-    url = build_url("https://moneydj.com", ["funddj", "ya", "yp010000.djhtm"], f"a={mdj_id}")
+    url = build_url("https://www.moneydj.com", ["funddj", "ya", "yp010000.djhtm"], f"a={mdj_id}")
     try:
         resp = session.get(url, headers=HEADERS, timeout=20)
         if resp.status_code == 200:
@@ -92,31 +91,41 @@ def fetch_mdj_recent_30(session, mdj_id):
 
 
 def fetch_mdj_range(session, mdj_id, start_dt, end_dt):
-    """指定日期區間抓取 MoneyDJ 歷史淨值（支援 30 天視窗滑動回補）"""
+    """使用 MoneyDJ 標準歷史區間接口 BCDNavList.aspx（b=起始日, c=結束日）"""
     url = build_url(
-        "https://moneydj.com",
-        ["funddj", "ya", "yp010001.djhtm"],
-        f"a={mdj_id}&b={start_dt.strftime('%Y/%m/%d')}&e={end_dt.strftime('%Y/%m/%d')}"
+        "https://www.moneydj.com",
+        ["funddj", "bcd", "BCDNavList.aspx"],
+        f"a={mdj_id}&b={start_dt.strftime('%Y/%m/%d')}&c={end_dt.strftime('%Y/%m/%d')}"
     )
     parsed = {}
     try:
-        resp = session.get(url, headers=HEADERS, timeout=20)
-        if resp.status_code == 200:
-            resp.encoding = "big5"
-            clean_text = re.sub(r"<[^>]+>", " ", resp.text)
-            pairs = re.findall(r"(\d{4}/\d{2}/\d{2})\s+([\d,]+\.\d+)", clean_text)
-            for d_raw, nav_raw in pairs:
-                d_iso = d_raw.replace("/", "-")
-                val = float(nav_raw.replace(",", ""))
-                if val > 0 and d_iso >= START_DATE:
-                    parsed[d_iso] = round(val, 4)
+        resp = session.get(url, headers=HEADERS, timeout=25)
+        if resp.status_code != 200:
+            print(f"    [HTTP {resp.status_code}] 無法讀取區間頁面")
+            return parsed
+
+        # BCDNavList.aspx 通常為 UTF-8 或 Big5，自動交由 requests 偵測或轉碼
+        if resp.encoding and resp.encoding.lower() in ("iso-8859-1", "ascii"):
+            resp.encoding = resp.apparent_encoding or "utf-8"
+
+        clean_text = re.sub(r"<[^>]+>", " ", resp.text)
+        # 支援 YYYY/MM/DD 或 YYYY-MM-DD 格式
+        pairs = re.findall(r"(\d{4}[/-]\d{2}[/-]\d{2})\s+([\d,]+\.\d+)", clean_text)
+        for d_raw, nav_raw in pairs:
+            d_iso = d_raw.replace("/", "-")
+            val = float(nav_raw.replace(",", ""))
+            if val > 0 and d_iso >= START_DATE:
+                parsed[d_iso] = round(val, 4)
     except Exception as e:
         print(f"    [MDJ區間查詢異常 {start_dt}~{end_dt}] {e}")
     return parsed
 
 
-def backfill_by_30_days(session, mdj_id, merged_records, max_batches=30):
-    """以現有最早日期為基準點，每次往前推 30 天批次抓取，直到 2010-01-04"""
+def backfill_history(session, mdj_id, merged_records, window_days=365, max_batches=25):
+    """
+    以現有最早日期為基準點，每次往前推 365 天（1 年）批次抓取，
+    單次執行即可把 2010 年至今全部補滿！
+    """
     target_start = datetime.date.fromisoformat(START_DATE)
     earliest_str = min(merged_records.keys()) if merged_records else datetime.date.today().strftime("%Y-%m-%d")
     cursor_end = datetime.date.fromisoformat(earliest_str) - datetime.timedelta(days=1)
@@ -125,7 +134,7 @@ def backfill_by_30_days(session, mdj_id, merged_records, max_batches=30):
     empty_streak = 0
 
     while cursor_end >= target_start and batch_count < max_batches:
-        cursor_start = max(target_start, cursor_end - datetime.timedelta(days=30))
+        cursor_start = max(target_start, cursor_end - datetime.timedelta(days=window_days))
         batch_data = fetch_mdj_range(session, mdj_id, cursor_start, cursor_end)
         batch_count += 1
 
@@ -136,8 +145,8 @@ def backfill_by_30_days(session, mdj_id, merged_records, max_batches=30):
         else:
             empty_streak += 1
             print(f"    [批次 {batch_count}] {cursor_start} ~ {cursor_end}：無交易資料（連續 {empty_streak} 次）")
-            if empty_streak >= 6:
-                print(f"    -> 已達該基金最早成立日附近，停止往回回補。")
+            if empty_streak >= 3:
+                print(f"    -> 連續 3 年無資料，停止往回回補。")
                 break
 
         cursor_end = cursor_start - datetime.timedelta(days=1)
@@ -149,16 +158,16 @@ def backfill_by_30_days(session, mdj_id, merged_records, max_batches=30):
 def update_fund(session, fund_name, info, existing_records):
     merged = dict(existing_records)
 
-    # 1. 先抓最新近 30 日淨值
+    # 1. 抓最新近 30 日淨值
     recent = fetch_mdj_recent_30(session, info["mdj_id"])
     print(f"  -> 最新近30日取得: {len(recent)} 筆")
     merged.update(recent)
 
-    # 2. 檢查最早日期是否已達 2010-01-04，若還沒補滿，每次往前推 30 天批次補齊
+    # 2. 若最早日期尚未達 2010-01-04，以 1 年為單位往回回補
     earliest_date = min(merged.keys()) if merged else "9999-12-31"
     if earliest_date > START_DATE:
-        print(f"  -> 目前最早資料為 {earliest_date}，啟動 30 天滑動視窗往回回補...")
-        merged = backfill_by_30_days(session, info["mdj_id"], merged, max_batches=30)
+        print(f"  -> 目前最早資料為 {earliest_date}，啟動 365 天視窗往回回補...")
+        merged = backfill_history(session, info["mdj_id"], merged, window_days=365, max_batches=25)
 
     return dict(sorted(merged.items()))
 
@@ -210,7 +219,6 @@ def main():
 
     for name, ticker in BENCHMARKS.items():
         print(f"Fetching benchmark: {name} ({ticker})...")
-        # 大盤指標若已抓過且非每日收盤時段，可於每5分鐘回補期間沿用舊檔加速（每日最後仍會刷新）
         fetched = fetch_benchmark_history(ticker)
         output["benchmarks"][name] = fetched if fetched else existing_benchmarks.get(name, {})
 
