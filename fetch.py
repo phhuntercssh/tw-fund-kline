@@ -99,16 +99,23 @@ def parse_aspnet_hidden(html):
     return fields
 
 
+
+
+
+
+_SITCA_DEBUG_PRINTED = False
+
+
 def fetch_sitca_month(session, corp_id, year, month, target_isins):
     """
     向投信投顧公會 (SITCA) IN2106.aspx 查詢指定投信在某年某月的全部基金每日淨值，
-    並依照 ISIN 一次提取該投信旗下多檔基金（例如同時提取野村台灣運籌與野村優質）。
+    自動解析網頁下拉選單的實際選項值（支援西元/民國年與各種選項格式）。
     """
-    url = build_url("https://www.sitca.org.tw", ["ROC", "Industry", "IN2106.aspx"], "pid=IN2213_02")
+    global _SITCA_DEBUG_PRINTED
+    url = build_url("https://sitca.org.tw", ["ROC", "Industry", "IN2106.aspx"], "pid=IN2213_02")
     results_by_isin = {isin: {} for isin in target_isins}
 
     try:
-        # 1. 先 GET 取得表單隱藏欄位與下拉選單名稱
         r_get = session.get(url, headers=HEADERS, timeout=25)
         if r_get.status_code != 200:
             print(f"    [SITCA GET HTTP {r_get.status_code}]")
@@ -116,25 +123,69 @@ def fetch_sitca_month(session, corp_id, year, month, target_isins):
         r_get.encoding = "utf-8"
         hidden = parse_aspnet_hidden(r_get.text)
 
-        # 自動偵測表單內年月與投信下拉選單的 name 屬性
-        select_names = re.findall(r'<select[^>]+name=["\']([^"\']+)["\']', r_get.text, re.I)
-        btn_match = re.search(r'<input[^>]+type=["\']submit["\'][^>]+name=["\']([^"\']+)["\']', r_get.text, re.I)
+        # 解析所有 <select> 及其內部 <option value="...">
+        selects = re.findall(r'<select[^>]+name=["\']([^"\']+)["\'][^>]*>(.*?)</select>', r_get.text, re.S | re.I)
+        btn_match = re.search(r'<input[^>]+type=["\'](?:submit|image)["\'][^>]+name=["\']([^"\']+)["\']', r_get.text, re.I)
 
-        ym_str = f"{year}{month:02d}"
+        if not _SITCA_DEBUG_PRINTED:
+            print(f"    [SITCA表單診斷] 偵測到 {len(selects)} 個下拉選單, 按鈕={btn_match.group(1) if btn_match else '無'}")
+            for s_name, s_body in selects:
+                opts = re.findall(r'<option[^>]+value=["\']([^"\']*)["\'][^>]*>([^<]*)</option>', s_body, re.I)
+                print(f"      - 選單 {s_name}: 前5項={opts[:5]}")
+            _SITCA_DEBUG_PRINTED = True
+
+        roc_year = year - 1911
         post_data = dict(hidden)
-        for s_name in select_names:
-            low = s_name.lower()
-            if "year" in low or "yy" in low:
+
+        for s_name, s_body in selects:
+            opts = re.findall(r'<option[^>]+value=["\']([^"\']*)["\'][^>]*>([^<]*)</option>', s_body, re.I)
+            opt_vals = [v.strip() for v, _ in opts if v.strip()]
+            if not opt_vals:
+                continue
+
+            # 1. 投信公司選單：尋找包含 corp_id (如 A0032) 或相近代碼的選項
+            matched_corp = next((v for v in opt_vals if corp_id in v or corp_id.replace("A00", "A") in v), None)
+            if matched_corp:
+                post_data[s_name] = matched_corp
+                continue
+
+            # 2. 年月合併選單 (如 202609 或 11509)
+            ym_ad = f"{year}{month:02d}"
+            ym_roc = f"{roc_year}{month:02d}"
+            if ym_ad in opt_vals:
+                post_data[s_name] = ym_ad
+                continue
+            if ym_roc in opt_vals:
+                post_data[s_name] = ym_roc
+                continue
+
+            # 3. 獨立年份選單 (西元 2026 或民國 115)
+            if str(year) in opt_vals:
                 post_data[s_name] = str(year)
-            elif "month" in low or "mm" in low:
+                continue
+            if str(roc_year) in opt_vals:
+                post_data[s_name] = str(roc_year)
+                continue
+
+            # 4. 獨立月份選單 (09 或 9)
+            if f"{month:02d}" in opt_vals and len(opt_vals) <= 15:
                 post_data[s_name] = f"{month:02d}"
-            elif "ym" in low or "date" in low:
-                post_data[s_name] = ym_str
-            elif "corp" in low or "com" in low or "ddl" in low:
-                post_data[s_name] = corp_id
+                continue
+            if str(month) in opt_vals and len(opt_vals) <= 15:
+                post_data[s_name] = str(month)
+                continue
+
+            # 其餘選單保留預設 selected 值
+            sel_m = re.search(r'<option[^>]+selected[^>]+value=["\']([^"\']*)["\']', s_body, re.I)
+            post_data[s_name] = sel_m.group(1) if sel_m else opt_vals[0]
 
         if btn_match:
-            post_data[btn_match.group(1)] = "查詢"
+            btn_name = btn_match.group(1)
+            if "image" in r_get.text.lower():
+                post_data[f"{btn_name}.x"] = "10"
+                post_data[f"{btn_name}.y"] = "10"
+            else:
+                post_data[btn_name] = "查詢"
 
         r_post = session.post(url, data=post_data, headers={**HEADERS, "Referer": url}, timeout=30)
         if r_post.status_code != 200:
@@ -142,7 +193,7 @@ def fetch_sitca_month(session, corp_id, year, month, target_isins):
             return results_by_isin
         r_post.encoding = "utf-8"
 
-        # 2. 解析回傳表格每一列（找尋包含目標 ISIN 與日期/淨值的列）
+        # 解析回傳表格每一列
         rows = re.findall(r"<tr[^>]*>(.*?)</tr>", r_post.text, re.S | re.I)
         for row_html in rows:
             matched_isin = None
@@ -157,7 +208,6 @@ def fetch_sitca_month(session, corp_id, year, month, target_isins):
             d_iso = None
             nav_val = None
             for cell in cells:
-                # 支援西元 2025/05/02 或民國 114/05/02
                 m_ad = re.match(r"^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$", cell)
                 m_roc = re.match(r"^(\d{2,3})[/-](\d{1,2})[/-](\d{1,2})$", cell)
                 if m_ad:
@@ -180,6 +230,7 @@ def fetch_sitca_month(session, corp_id, year, month, target_isins):
         print(f"    [SITCA異常 {corp_id} {year}-{month:02d}] {e}")
 
     return results_by_isin
+
 
 
 
