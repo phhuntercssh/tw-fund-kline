@@ -108,8 +108,7 @@ _SITCA_DEBUG_PRINTED = False
 
 def fetch_sitca_month(session, corp_id, year, month, target_isins):
     """
-    向投信投顧公會 (SITCA) IN2106.aspx 查詢指定投信在某年某月的全部基金每日淨值，
-    自動解析網頁下拉選單的實際選項值（支援西元/民國年與各種選項格式）。
+    向投信投顧公會 (SITCA) IN2106.aspx 查詢指定投信在某年某月的全部基金每日淨值。
     """
     global _SITCA_DEBUG_PRINTED
     url = build_url("https://www." + "sitca.org.tw", ["ROC", "Industry", "IN2106.aspx"], "pid=IN2213_02")
@@ -123,69 +122,47 @@ def fetch_sitca_month(session, corp_id, year, month, target_isins):
         r_get.encoding = "utf-8"
         hidden = parse_aspnet_hidden(r_get.text)
 
-        # 解析所有 <select> 及其內部 <option value="...">
-        selects = re.findall(r'<select[^>]+name=["\']([^"\']+)["\'][^>]*>(.*?)</select>', r_get.text, re.S | re.I)
+        # 解析所有 <input type="text"> 文字輸入框（日期欄位所在位置）
+        text_inputs = re.findall(r'<input[^>]+type=["\']text["\'][^>]*>', r_get.text, re.I)
+        input_names = []
+        for tag in text_inputs:
+            nm = re.search(r'name=["\']([^"\']+)["\']', tag, re.I)
+            vm = re.search(r'value=["\']([^"\']*)["\']', tag, re.I)
+            if nm:
+                input_names.append((nm.group(1), vm.group(1) if vm else ""))
+
         btn_match = re.search(r'<input[^>]+type=["\'](?:submit|image)["\'][^>]+name=["\']([^"\']+)["\']', r_get.text, re.I)
 
         if not _SITCA_DEBUG_PRINTED:
-            print(f"    [SITCA表單診斷] 偵測到 {len(selects)} 個下拉選單, 按鈕={btn_match.group(1) if btn_match else '無'}")
-            for s_name, s_body in selects:
-                opts = re.findall(r'<option[^>]+value=["\']([^"\']*)["\'][^>]*>([^<]*)</option>', s_body, re.I)
-                print(f"      - 選單 {s_name}: 前5項={opts[:5]}")
+            print(f"    [SITCA文字框診斷] 偵測到文字框={input_names}")
             _SITCA_DEBUG_PRINTED = True
 
-        roc_year = year - 1911
+        # 計算該月第一天與最後一天
+        import calendar
+        _, last_day = calendar.monthrange(year, month)
+        d_start_slash = f"{year}/{month:02d}/01"
+        d_end_slash = f"{year}/{month:02d}/{last_day:02d}"
+        d_start_compact = f"{year}{month:02d}01"
+        d_end_compact = f"{year}{month:02d}{last_day:02d}"
+
         post_data = dict(hidden)
+        post_data["ctl00$ContentPlaceHolder1$ddlQ_Comid"] = corp_id
 
-        for s_name, s_body in selects:
-            opts = re.findall(r'<option[^>]+value=["\']([^"\']*)["\'][^>]*>([^<]*)</option>', s_body, re.I)
-            opt_vals = [v.strip() for v, _ in opts if v.strip()]
-            if not opt_vals:
-                continue
-
-            # 1. 投信公司選單：尋找包含 corp_id (如 A0032) 或相近代碼的選項
-            matched_corp = next((v for v in opt_vals if corp_id in v or corp_id.replace("A00", "A") in v), None)
-            if matched_corp:
-                post_data[s_name] = matched_corp
-                continue
-
-            # 2. 年月合併選單 (如 202609 或 11509)
-            ym_ad = f"{year}{month:02d}"
-            ym_roc = f"{roc_year}{month:02d}"
-            if ym_ad in opt_vals:
-                post_data[s_name] = ym_ad
-                continue
-            if ym_roc in opt_vals:
-                post_data[s_name] = ym_roc
-                continue
-
-            # 3. 獨立年份選單 (西元 2026 或民國 115)
-            if str(year) in opt_vals:
-                post_data[s_name] = str(year)
-                continue
-            if str(roc_year) in opt_vals:
-                post_data[s_name] = str(roc_year)
-                continue
-
-            # 4. 獨立月份選單 (09 或 9)
-            if f"{month:02d}" in opt_vals and len(opt_vals) <= 15:
-                post_data[s_name] = f"{month:02d}"
-                continue
-            if str(month) in opt_vals and len(opt_vals) <= 15:
-                post_data[s_name] = str(month)
-                continue
-
-            # 其餘選單保留預設 selected 值
-            sel_m = re.search(r'<option[^>]+selected[^>]+value=["\']([^"\']*)["\']', s_body, re.I)
-            post_data[s_name] = sel_m.group(1) if sel_m else opt_vals[0]
+        # 依照文字框預設值格式（是否有斜線）自動填入該月起訖日期
+        for idx, (inp_name, default_val) in enumerate(input_names):
+            use_slash = "/" in default_val or "-" in default_val or not default_val
+            if len(input_names) >= 2:
+                if idx == 0:
+                    post_data[inp_name] = d_start_slash if use_slash else d_start_compact
+                elif idx == 1:
+                    post_data[inp_name] = d_end_slash if use_slash else d_end_compact
+                else:
+                    post_data[inp_name] = default_val
+            else:
+                post_data[inp_name] = f"{year}/{month:02d}" if use_slash else f"{year}{month:02d}"
 
         if btn_match:
-            btn_name = btn_match.group(1)
-            if "image" in r_get.text.lower():
-                post_data[f"{btn_name}.x"] = "10"
-                post_data[f"{btn_name}.y"] = "10"
-            else:
-                post_data[btn_name] = "查詢"
+            post_data[btn_match.group(1)] = "查詢"
 
         r_post = session.post(url, data=post_data, headers={**HEADERS, "Referer": url}, timeout=30)
         if r_post.status_code != 200:
@@ -230,6 +207,7 @@ def fetch_sitca_month(session, corp_id, year, month, target_isins):
         print(f"    [SITCA異常 {corp_id} {year}-{month:02d}] {e}")
 
     return results_by_isin
+
 
 
 
