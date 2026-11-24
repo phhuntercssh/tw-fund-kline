@@ -9,20 +9,17 @@ import yfinance as yf
 FUNDS = {
     "野村台灣運籌": {
         "isin": "TW000T3218Y2",
-        "yahoo_fo": "F0HKG05WZB:FO",
-        "anue_id": "A32002",
+        "sitca_corp": "A0032",
         "mdj_id": "ACKH03"
     },
     "野村優質(累積)": {
         "isin": "TW000T3201Y8",
-        "yahoo_fo": "F0HKG05X20:FO",
-        "anue_id": "A32001",
+        "sitca_corp": "A0032",
         "mdj_id": "ACIC01"
     },
     "施羅德台灣樂活A": {
         "isin": "TW000T4209Y0",
-        "yahoo_fo": "F000000LO1:FO",
-        "anue_id": "A42001",
+        "sitca_corp": "A0042",
         "mdj_id": "ACES10"
     }
 }
@@ -38,7 +35,7 @@ DATA_FILE = "data.json"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
@@ -61,8 +58,8 @@ def load_existing_data():
 
 
 def fetch_mdj_recent_30(session, mdj_id):
-    """增量更新：抓取 MoneyDJ 近 30 日最新淨值（已驗證 100% 穩定）"""
-    url = build_url("https://moneydj.com", ["funddj", "ya", "yp010000.djhtm"], f"a={mdj_id}")
+    """增量更新：抓取 MoneyDJ 近 30 日最新淨值"""
+    url = build_url("https://www.moneydj.com", ["funddj", "ya", "yp010000.djhtm"], f"a={mdj_id}")
     try:
         resp = session.get(url, headers=HEADERS, timeout=20)
         if resp.status_code == 200:
@@ -90,78 +87,106 @@ def fetch_mdj_recent_30(session, mdj_id):
     return {}
 
 
-def fetch_yahoo_tw_range(session, yahoo_fo, start_dt, end_dt):
-    """來源 1：Yahoo 股市台灣版基金走勢 API"""
-    start_ts = int(datetime.datetime(start_dt.year, start_dt.month, start_dt.day, tzinfo=datetime.timezone.utc).timestamp())
-    end_ts = int(datetime.datetime(end_dt.year, end_dt.month, end_dt.day, 23, 59, 59, tzinfo=datetime.timezone.utc).timestamp())
-
-    api_url = build_url(
-        "https://yahoo.com",
-        ["_td-stock", "api", "resource", f"FinanceChartService.ApacLibraCharts;symbols=%5B%22{yahoo_fo}%22%5D;type=null"],
-        f"period1={start_ts}&period2={end_ts}&interval=1d"
-    )
-    referer_url = build_url("https://yahoo.com", ["fund", yahoo_fo, "summary"])
-    parsed = {}
-
-    try:
-        resp = session.get(api_url, headers={**HEADERS, "Referer": referer_url}, timeout=20)
-        if resp.status_code == 200 and resp.text.strip():
-            data = resp.json()
-            chart_list = data if isinstance(data, list) else [data]
-            for item in chart_list:
-                res_arr = item.get("chart", {}).get("result", [])
-                res_obj = next(iter(res_arr), None)
-                if not isinstance(res_obj, dict):
-                    continue
-                timestamps = res_obj.get("timestamp", [])
-                quotes_list = res_obj.get("indicators", {}).get("quote", [])
-                quote_obj = next(iter(quotes_list), {})
-                closes = quote_obj.get("close", []) if isinstance(quote_obj, dict) else []
-                for ts, val in zip(timestamps, closes):
-                    if ts is not None and val is not None and float(val) > 0:
-                        d_iso = datetime.datetime.fromtimestamp(
-                            int(ts), tz=datetime.timezone(datetime.timedelta(hours=8))
-                        ).strftime("%Y-%m-%d")
-                        if start_dt.strftime("%Y-%m-%d") <= d_iso <= end_dt.strftime("%Y-%m-%d") and d_iso >= START_DATE:
-                            parsed[d_iso] = round(float(val), 4)
-    except Exception as e:
-        print(f"    [YahooTW異常 {start_dt}~{end_dt}] {e}")
-    return parsed
+def parse_aspnet_hidden(html):
+    """擷取 ASP.NET 網頁表單必需的 __VIEWSTATE 等隱藏欄位"""
+    fields = {}
+    for m in re.finditer(r'<input[^>]+type=["\']hidden["\'][^>]*>', html, re.I):
+        tag = m.group(0)
+        name_m = re.search(r'name=["\']([^"\']+)["\']', tag, re.I)
+        val_m = re.search(r'value=["\']([^"\']*)["\']', tag, re.I)
+        if name_m:
+            fields[name_m.group(1)] = val_m.group(1) if val_m else ""
+    return fields
 
 
-def fetch_yahoo_global_range(session, yahoo_fo, start_dt, end_dt):
-    """來源 2：Yahoo Finance 全球 v8 Chart API"""
-    start_ts = int(datetime.datetime(start_dt.year, start_dt.month, start_dt.day, tzinfo=datetime.timezone.utc).timestamp())
-    end_ts = int(datetime.datetime(end_dt.year, end_dt.month, end_dt.day, 23, 59, 59, tzinfo=datetime.timezone.utc).timestamp())
-
-    api_url = build_url(
-        "https://yahoo.com",
-        ["v8", "finance", "chart", yahoo_fo],
-        f"period1={start_ts}&period2={end_ts}&interval=1d"
-    )
-    parsed = {}
+def fetch_sitca_month(session, corp_id, year, month, target_isins):
+    """
+    向投信投顧公會 (SITCA) IN2106.aspx 查詢指定投信在某年某月的全部基金每日淨值，
+    並依照 ISIN 一次提取該投信旗下多檔基金（例如同時提取野村台灣運籌與野村優質）。
+    """
+    url = build_url("https://www.sitca.org.tw", ["ROC", "Industry", "IN2106.aspx"], "pid=IN2213_02")
+    results_by_isin = {isin: {} for isin in target_isins}
 
     try:
-        resp = session.get(api_url, headers=HEADERS, timeout=20)
-        if resp.status_code == 200 and resp.text.strip():
-            data = resp.json()
-            res_arr = data.get("chart", {}).get("result", [])
-            res_obj = next(iter(res_arr), None)
-            if isinstance(res_obj, dict):
-                timestamps = res_obj.get("timestamp", [])
-                quotes_list = res_obj.get("indicators", {}).get("quote", [])
-                quote_obj = next(iter(quotes_list), {})
-                closes = quote_obj.get("close", []) if isinstance(quote_obj, dict) else []
-                for ts, val in zip(timestamps, closes):
-                    if ts is not None and val is not None and float(val) > 0:
-                        d_iso = datetime.datetime.fromtimestamp(
-                            int(ts), tz=datetime.timezone(datetime.timedelta(hours=8))
-                        ).strftime("%Y-%m-%d")
-                        if start_dt.strftime("%Y-%m-%d") <= d_iso <= end_dt.strftime("%Y-%m-%d") and d_iso >= START_DATE:
-                            parsed[d_iso] = round(float(val), 4)
+        # 1. 先 GET 取得表單隱藏欄位與下拉選單名稱
+        r_get = session.get(url, headers=HEADERS, timeout=25)
+        if r_get.status_code != 200:
+            print(f"    [SITCA GET HTTP {r_get.status_code}]")
+            return results_by_isin
+        r_get.encoding = "utf-8"
+        hidden = parse_aspnet_hidden(r_get.text)
+
+        # 自動偵測表單內年月與投信下拉選單的 name 屬性
+        select_names = re.findall(r'<select[^>]+name=["\']([^"\']+)["\']', r_get.text, re.I)
+        btn_match = re.search(r'<input[^>]+type=["\']submit["\'][^>]+name=["\']([^"\']+)["\']', r_get.text, re.I)
+
+        ym_str = f"{year}{month:02d}"
+        post_data = dict(hidden)
+        for s_name in select_names:
+            low = s_name.lower()
+            if "year" in low or "yy" in low:
+                post_data[s_name] = str(year)
+            elif "month" in low or "mm" in low:
+                post_data[s_name] = f"{month:02d}"
+            elif "ym" in low or "date" in low:
+                post_data[s_name] = ym_str
+            elif "corp" in low or "com" in low or "ddl" in low:
+                post_data[s_name] = corp_id
+
+        if btn_match:
+            post_data[btn_match.group(1)] = "查詢"
+
+        r_post = session.post(url, data=post_data, headers={**HEADERS, "Referer": url}, timeout=30)
+        if r_post.status_code != 200:
+            print(f"    [SITCA POST HTTP {r_post.status_code}]")
+            return results_by_isin
+        r_post.encoding = "utf-8"
+
+        # 2. 解析回傳表格每一列（找尋包含目標 ISIN 與日期/淨值的列）
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", r_post.text, re.S | re.I)
+        for row_html in rows:
+            matched_isin = None
+            for isin in target_isins:
+                if isin in row_html:
+                    matched_isin = isin
+                    break
+            if not matched_isin:
+                continue
+
+            cells = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row_html, re.S | re.I)]
+            d_iso = None
+            nav_val = None
+            for cell in cells:
+                # 支援西元 2025/05/02 或民國 114/05/02
+                m_ad = re.match(r"^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$", cell)
+                m_roc = re.match(r"^(\d{2,3})[/-](\d{1,2})[/-](\d{1,2})$", cell)
+                if m_ad:
+                    d_iso = f"{int(m_ad.group(1)):04d}-{int(m_ad.group(2)):02d}-{int(m_ad.group(3)):02d}"
+                elif m_roc:
+                    y_ad = int(m_roc.group(1)) + 1911
+                    d_iso = f"{y_ad:04d}-{int(m_roc.group(2)):02d}-{int(m_roc.group(3)):02d}"
+                elif re.match(r"^[\d,]+\.\d{2,4}$", cell):
+                    try:
+                        v = float(cell.replace(",", ""))
+                        if v > 0 and nav_val is None:
+                            nav_val = round(v, 4)
+                    except ValueError:
+                        pass
+
+            if d_iso and nav_val and d_iso >= START_DATE:
+                results_by_isin[matched_isin][d_iso] = nav_val
+
     except Exception as e:
-        print(f"    [YahooGlobal異常 {start_dt}~{end_dt}] {e}")
-    return parsed
+        print(f"    [SITCA異常 {corp_id} {year}-{month:02d}] {e}")
+
+    return results_by_isin
+
+
+
+
+
+
+
 def fetch_mdj_post_range(session, mdj_id, start_dt, end_dt):
     """來源 3：MoneyDJ 網頁歷史區間表單 POST 查詢"""
     url = build_url("https://moneydj.com", ["funddj", "ya", "yp010000.djhtm"], f"a={mdj_id}")
