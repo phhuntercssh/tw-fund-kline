@@ -282,9 +282,13 @@ def main():
     merged_all = {}
     for name, info in FUNDS.items():
         print(f"Updating recent 30d: {name}...", flush=True)
+        # 加在 main() 讀取 existing_funds 之後，自動清除先前誤抓的配息/低淨值級別斷層
         records = dict(existing_funds.get(name, {}))
-        if name == "施羅德台灣樂活A":
-            records = {d: v for d, v in records.items() if v > 20}
+        if name == "野村優質(累積)":
+            records = {d: v for d, v in records.items() if v > 80}
+        elif name == "施羅德台灣樂活A":
+            records = {d: v for d, v in records.items() if v > 25}
+
 
         recent = fetch_mdj_recent_30(session, info["mdj_id"])
         print(f"  -> MoneyDJ 近30日取得: {len(recent)} 筆", flush=True)
