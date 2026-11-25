@@ -78,14 +78,41 @@
 
 <script>
 let rawData = null;
-let klineChart, candleSeries, compareChart, spreadChart;
-let lineSeriesMap = {};
-let spreadSeriesMap = {};
-let patternSeriesList = []; // 存放白粗線與亮綠粗線標示序列
+let activeFund = '野村優質(累積)'; // 預設選中「野村優質(累積)」
 
-let currentMetricsMap = {}; // 儲存每日各項漲跌幅與淨值供 Tooltip 查詢
+let klineChart, compareChart, spreadChart;
+let topFundSeriesMap = {};   // 最上方三檔基金走勢線
+let lineSeriesMap = {};      // 中間績效百分比線
+let spreadSeriesMap = {};    // 下方超額報酬價差線
+let patternSeriesList = [];  // 白粗線與亮綠粗線標示序列
+
+let currentMetricsMap = {};
+
+// 三檔基金專屬配色（最上方圖表用）
+const TOP_FUND_CONFIG = {
+  '野村台灣運籌': { color: '#ff9800', priceScaleId: 'right', label: '野村台灣運籌 (右軸)' },
+  '野村優質(累積)': { color: '#ffd54f', priceScaleId: 'right', label: '野村優質(累積) (右軸)' },
+  '施羅德台灣樂活A': { color: '#ec407a', priceScaleId: 'left', label: '施羅德台灣樂活A (左軸)' }
+};
+
+// 中間與最下方圖表統一配色
+const BENCH_COLORS = {
+  fund: '#ff9800',
+  '加權指數': '#2962ff',
+  '台積電(2330)': '#e91e63',
+  '00935': '#00bcd4'
+};
 
 document.getElementById('endDate').value = new Date().toISOString().split('T').at(0);
+
+// 同步設定頁面下拉選單預設為「野村優質(累積)」
+const fundSelectEl = document.getElementById('fundSelect');
+if (fundSelectEl) {
+  fundSelectEl.value = activeFund;
+  fundSelectEl.addEventListener('change', (e) => {
+    selectActiveFund(e.target.value);
+  });
+}
 
 function showError(msg) {
   const banner = document.getElementById('statusBanner');
@@ -93,7 +120,58 @@ function showError(msg) {
   banner.innerHTML = msg;
 }
 
+// 切換目前焦點基金並即時更新下方兩張圖與按鈕狀態
+function selectActiveFund(fundName) {
+  if (!TOP_FUND_CONFIG[fundName]) return;
+  activeFund = fundName;
+  if (fundSelectEl) fundSelectEl.value = fundName;
+
+  // 更新最上方三顆按鈕的選中樣式
+  document.querySelectorAll('.top-fund-pill').forEach(btn => {
+    const isSelected = btn.dataset.fund === fundName;
+    const cfg = TOP_FUND_CONFIG[btn.dataset.fund];
+    btn.style.background = isSelected ? cfg.color : 'rgba(43, 43, 67, 0.85)';
+    btn.style.color = isSelected ? '#131722' : '#d1d4dc';
+    btn.style.fontWeight = isSelected ? 'bold' : 'normal';
+    btn.style.boxShadow = isSelected ? `0 0 10px ${cfg.color}66` : 'none';
+  });
+
+  // 突顯選中基金在最上方圖表的線條粗細
+  for (const [fName, series] of Object.entries(topFundSeriesMap)) {
+    series.applyOptions({ lineWidth: fName === activeFund ? 3 : 1.5 });
+  }
+
+  renderAll();
+}
+
+// 在最上方圖表標題列建立可點擊的三檔基金切換按鈕列
+function buildTopFundSelectorBar() {
+  const titleEl = document.getElementById('klineTitle');
+  if (!titleEl || document.getElementById('topFundBar')) return;
+
+  const bar = document.createElement('div');
+  bar.id = 'topFundBar';
+  bar.style.cssText = 'display:inline-flex; flex-wrap:wrap; gap:8px; margin-left:12px; vertical-align:middle;';
+
+  for (const [fName, cfg] of Object.entries(TOP_FUND_CONFIG)) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'top-fund-pill';
+    btn.dataset.fund = fName;
+    btn.innerText = `● ${cfg.label}`;
+    btn.style.cssText = `
+      border: 1px solid ${cfg.color}; border-radius: 14px; padding: 3px 11px;
+      font-size: 12.5px; cursor: pointer; transition: all 0.15s ease;
+    `;
+    btn.onclick = () => selectActiveFund(fName);
+    bar.appendChild(btn);
+  }
+  titleEl.parentNode.insertBefore(bar, titleEl.nextSibling);
+}
+
 function initCharts() {
+  buildTopFundSelectorBar();
+
   const commonOptions = {
     layout: { background: { color: '#1e222d' }, textColor: '#d1d4dc' },
     grid: { vertLines: { color: '#2b2b43' }, horzLines: { color: '#2b2b43' } },
@@ -101,33 +179,64 @@ function initCharts() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
 
-  // 1. 淨值 K 線圖
-  klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), commonOptions);
-  candleSeries = klineChart.addCandlestickSeries({
-    upColor: '#ef5350', downColor: '#26a69a',
-    borderUpColor: '#ef5350', borderDownColor: '#26a69a',
-    wickUpColor: '#ef5350', wickDownColor: '#26a69a'
+  // 1. 最上方圖表：三檔基金淨值同框顯示（啟用左右雙座標軸）
+  klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), {
+    ...commonOptions,
+    rightPriceScale: { visible: true, borderColor: '#485c7b' },
+    leftPriceScale: { visible: true, borderColor: '#485c7b' }
   });
 
-  // 2. 績效百分比比較圖
+  for (const [fName, cfg] of Object.entries(TOP_FUND_CONFIG)) {
+    topFundSeriesMap[fName] = klineChart.addLineSeries({
+      color: cfg.color,
+      priceScaleId: cfg.priceScaleId,
+      lineWidth: fName === activeFund ? 3 : 1.5,
+      title: fName
+    });
+  }
+
+  // 支援直接在最上方圖表點擊任意一條基金線，自動切換下方兩圖
+  klineChart.subscribeClick(param => {
+    if (!param.point || !param.seriesData) return;
+    let closestFund = null;
+    let minPixelDist = Infinity;
+
+    for (const [fName, series] of Object.entries(topFundSeriesMap)) {
+      const pointData = param.seriesData.get(series);
+      if (pointData && pointData.value !== undefined) {
+        const coordY = series.priceToCoordinate(pointData.value);
+        if (coordY !== null) {
+          const dist = Math.abs(coordY - param.point.y);
+          if (dist < minPixelDist) {
+            minPixelDist = dist;
+            closestFund = fName;
+          }
+        }
+      }
+    }
+    if (closestFund && closestFund !== activeFund && minPixelDist <= 35) {
+      selectActiveFund(closestFund);
+    }
+  });
+
+  // 2. 中間圖表：績效百分比比較圖
   compareChart = LightweightCharts.createChart(document.getElementById('compare-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(2) + '%' }
   });
-  const colors = { fund: '#ff9800', '加權指數': '#2962ff', '台積電(2330)': '#e91e63', '00935': '#00bcd4' };
-  for (const [key, color] of Object.entries(colors)) {
+  for (const [key, color] of Object.entries(BENCH_COLORS)) {
     lineSeriesMap[key] = compareChart.addLineSeries({ color, lineWidth: key === 'fund' ? 3 : 2 });
   }
 
-  // 3. 超額報酬價差圖
+  // 3. 最下方圖表：超額報酬價差圖（顏色與中間圖表完全一致）
   spreadChart = LightweightCharts.createChart(document.getElementById('spread-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) + '%' }
   });
   const spreadColors = {
-    'diff_twii': '#4caf50',
-    'diff_2330': '#ab47bc',
-    'diff_00935': '#ffd54f'
+    'diff_twii': BENCH_COLORS['加權指數'],       // #2962ff
+    'diff_2330': BENCH_COLORS['台積電(2330)'],   // #e91e63
+    'diff_00935': BENCH_COLORS['00935']          // #00bcd4
   };
   for (const [key, color] of Object.entries(spreadColors)) {
     spreadSeriesMap[key] = spreadChart.addLineSeries({ color, lineWidth: 2 });
@@ -141,9 +250,7 @@ function initCharts() {
     title: '0% 基準'
   });
 
-  // ==========================================
-  // 功能 1：三張圖表「放大縮小、左右拖曳」100% 同步
-  // ==========================================
+  // 三張圖表「放大縮小、左右拖曳」100% 同步
   const charts = [klineChart, compareChart, spreadChart];
   let isSyncingRange = false;
 
@@ -160,16 +267,14 @@ function initCharts() {
     });
   });
 
-  // ==========================================
-  // 功能 2：滑鼠移動點上依序顯示 (1)單日 (2)5日 (3)30日 (4)60日 (5)90日 漲跌幅
-  // ==========================================
+  // 滑鼠移動點上顯示三檔基金淨值與選中基金五項漲跌幅
   const tooltip = document.createElement('div');
   tooltip.style.cssText = `
     position: fixed; display: none; pointer-events: none; z-index: 9999;
     background: rgba(20, 24, 34, 0.95); color: #e0e3eb;
     border: 1px solid #485c7b; border-radius: 6px; padding: 10px 14px;
-    font-size: 13px; line-height: 1.7; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
-    min-width: 225px;
+    font-size: 13px; line-height: 1.65; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+    min-width: 235px;
   `;
   document.body.appendChild(tooltip);
 
@@ -194,9 +299,8 @@ function initCharts() {
       const m = currentMetricsMap[dateStr];
       if (!m) return;
 
-      // 同步其他兩張圖的十字準線
-      if (sourceIdx !== 0 && m.nav !== undefined) {
-        klineChart.setCrosshairPosition(m.nav, dateStr, candleSeries);
+      if (sourceIdx !== 0 && m.nav !== undefined && topFundSeriesMap[activeFund]) {
+        klineChart.setCrosshairPosition(m.nav, dateStr, topFundSeriesMap[activeFund]);
       }
       if (sourceIdx !== 1 && m.cumPct !== undefined) {
         compareChart.setCrosshairPosition(m.cumPct, dateStr, lineSeriesMap['fund']);
@@ -205,17 +309,31 @@ function initCharts() {
         spreadChart.setCrosshairPosition(m.spreadTwii, dateStr, spreadSeriesMap['diff_twii']);
       }
 
-      const fundName = document.getElementById('fundSelect').value;
+      let navRowsHtml = '';
+      for (const [fName, cfg] of Object.entries(TOP_FUND_CONFIG)) {
+        const v = m.allNavs?.[fName];
+        const isCur = fName === activeFund;
+        navRowsHtml += `<div style="${isCur ? 'background:rgba(255,255,255,0.08); padding:0 4px; border-radius:3px;' : ''}">
+          <span style="color:${cfg.color};">●</span> ${fName}：<b>${v !== undefined ? v.toFixed(2) : '--'}</b>
+        </div>`;
+      }
+
       let html = `
         <div style="font-weight:bold; font-size:13.5px; color:#fff; border-bottom:1px solid #363a45; padding-bottom:4px; margin-bottom:6px;">
-          📅 ${dateStr} <span style="font-weight:normal; color:#ff9800; float:right;">淨值 ${m.nav.toFixed(2)}</span>
+          📅 ${dateStr}
         </div>
-        <div style="font-size:11.5px; color:#9598a1; margin-bottom:2px;">【${fundName} 區間漲跌幅】</div>
-        <div>(1) 單日漲跌幅：${fmtPctColor(m.d1)}</div>
-        <div>(2) 5日漲跌幅：${fmtPctColor(m.d5)}</div>
-        <div>(3) 30日漲跌幅：${fmtPctColor(m.d30)}</div>
-        <div>(4) 60日漲跌幅：${fmtPctColor(m.d60)}</div>
-        <div>(5) 90日漲跌幅：${fmtPctColor(m.d90)}</div>
+        <div style="margin-bottom:6px;">
+          <div style="color:#9598a1; font-size:11.5px;">【三檔基金淨值（點擊可切換下方兩圖）】</div>
+          ${navRowsHtml}
+        </div>
+        <div style="border-top:1px solid #363a45; padding-top:5px;">
+          <div style="color:#9598a1; font-size:11.5px;">【${activeFund} 漲跌幅】</div>
+          <div>(1) 單日漲跌幅：${fmtPctColor(m.d1)}</div>
+          <div>(2) 5日漲跌幅：${fmtPctColor(m.d5)}</div>
+          <div>(3) 30日漲跌幅：${fmtPctColor(m.d30)}</div>
+          <div>(4) 60日漲跌幅：${fmtPctColor(m.d60)}</div>
+          <div>(5) 90日漲跌幅：${fmtPctColor(m.d90)}</div>
+        </div>
       `;
 
       if (m.patternTag) {
@@ -227,8 +345,8 @@ function initCharts() {
 
       const mouseX = param.sourceEvent ? param.sourceEvent.clientX : 0;
       const mouseY = param.sourceEvent ? param.sourceEvent.clientY : 0;
-      const boxW = 245;
-      const boxH = tooltip.offsetHeight || 220;
+      const boxW = 260;
+      const boxH = tooltip.offsetHeight || 290;
       const leftPos = (mouseX + boxW + 20 > window.innerWidth) ? (mouseX - boxW - 15) : (mouseX + 16);
       const topPos = (mouseY + boxH + 20 > window.innerHeight) ? Math.max(10, window.innerHeight - boxH - 15) : (mouseY + 16);
       tooltip.style.left = leftPos + 'px';
@@ -238,24 +356,22 @@ function initCharts() {
 }
 
 
+  
 
-// ==========================================
-// 功能 3 & 4：偵測「白粗線（連漲中斷<=4次後急跌-5%）」與「亮綠粗線（連跌超-5%中斷<=4次）」
-// ==========================================
-function detectAndDrawPatterns(entries) {
-  // 清除舊的粗線標示
+
+function detectAndDrawPatterns(entries, targetPriceScaleId) {
   for (const s of patternSeriesList) {
     try { klineChart.removeSeries(s); } catch (e) {}
   }
   patternSeriesList = [];
 
-  if (entries.length < 3) return;
+  if (entries.length < 3) return {};
 
-  const whiteSegments = []; // 白粗線：連漲波段（允許中斷3~5次）接單日大跌 <= -5%
-  const greenSegments = []; // 亮綠粗線：連跌波段（允許中斷3~5次）累計跌幅 <= -5%
+  const whiteSegments = [];
+  const greenSegments = [];
   const tagMap = {};
 
-  // 1. 偵測「白粗線」：找尋單日大跌 <= -5% 的轉折日，並往前追溯其連漲波段（容許最多 4 次下跌中斷）
+  // 1. 白粗線：連漲波段（容許中斷 <= 4 次）後單日急跌 <= -5%
   for (let i = 1; i < entries.length; i++) {
     const prevNav = entries.at(i - 1).at(1);
     const currNav = entries.at(i).at(1);
@@ -264,9 +380,8 @@ function detectAndDrawPatterns(entries) {
     if (dailyRet <= -5.0) {
       let startIdx = i - 1;
       let downInterrupts = 0;
-      let peakNav = prevNav;
+      const peakNav = prevNav;
 
-      // 往前追溯連漲波段，容許最多 4 次（3~5次範圍內）小幅回檔中斷
       for (let j = i - 1; j >= 1; j--) {
         const dPrev = entries.at(j - 1).at(1);
         const dCurr = entries.at(j).at(1);
@@ -274,9 +389,7 @@ function detectAndDrawPatterns(entries) {
           startIdx = j - 1;
         } else {
           downInterrupts++;
-          if (downInterrupts > 4) break;
-          // 若回檔跌破更早之前的起漲點太多（超過3%），視為波段已破壞
-          if (dPrev < peakNav * 0.90) break;
+          if (downInterrupts > 4 || dPrev < peakNav * 0.90) break;
           startIdx = j - 1;
         }
       }
@@ -284,7 +397,6 @@ function detectAndDrawPatterns(entries) {
       const startNav = entries.at(startIdx).at(1);
       const runUpPct = ((peakNav - startNav) / startNav) * 100;
 
-      // 確認前面確實是一段上漲波段（至少上漲超過 2% 且包含大跌當日）
       if (startIdx < i - 1 && runUpPct >= 2.0) {
         const seg = entries.slice(startIdx, i + 1).map(([d, v]) => ({ time: d, value: v }));
         whiteSegments.push(seg);
@@ -294,7 +406,7 @@ function detectAndDrawPatterns(entries) {
     }
   }
 
-  // 2. 偵測「亮綠粗線」：連續下跌波段（允許最多 4 次反彈中斷），波段累計跌幅 <= -5%
+  // 2. 亮綠粗線：連續下跌波段（容許中斷 <= 4 次），累計跌幅 <= -5%
   let idx = 0;
   while (idx < entries.length - 1) {
     if (entries.at(idx + 1).at(1) < entries.at(idx).at(1)) {
@@ -312,13 +424,11 @@ function detectAndDrawPatterns(entries) {
           if (nextNav < troughNav) troughNav = nextNav;
         } else {
           upInterrupts++;
-          // 允許中斷 3~5 次（設為 4 次），且反彈不能突破起跌高點
           if (upInterrupts > 4 || nextNav >= peakNav) break;
           endIdx = j + 1;
         }
       }
 
-      // 裁切掉尾端無效的反彈日，讓亮綠線精準停在波段最低點
       while (endIdx > startIdx && entries.at(endIdx).at(1) > troughNav) {
         endIdx--;
       }
@@ -340,10 +450,10 @@ function detectAndDrawPatterns(entries) {
     idx++;
   }
 
-  // 繪製亮綠粗線（先畫底層）
   for (const seg of greenSegments) {
     const s = klineChart.addLineSeries({
       color: '#00e676',
+      priceScaleId: targetPriceScaleId,
       lineWidth: 4,
       crosshairMarkerVisible: false,
       lastValueVisible: false,
@@ -353,10 +463,10 @@ function detectAndDrawPatterns(entries) {
     patternSeriesList.push(s);
   }
 
-  // 繪製白粗線（疊加在最上層突顯急跌轉折）
   for (const seg of whiteSegments) {
     const s = klineChart.addLineSeries({
       color: '#ffffff',
+      priceScaleId: targetPriceScaleId,
       lineWidth: 4,
       crosshairMarkerVisible: false,
       lastValueVisible: false,
@@ -369,47 +479,13 @@ function detectAndDrawPatterns(entries) {
   return tagMap;
 }
 
-function aggregateOHLC(entries, timeframe) {
-  const dailyCandles = [];
-  for (let i = 0; i < entries.length; i++) {
-    const date = entries.at(i).at(0);
-    const close = entries.at(i).at(1);
-    const open = i === 0 ? close : entries.at(i - 1).at(1);
-    dailyCandles.push({
-      time: date,
-      open: open,
-      high: Math.max(open, close),
-      low: Math.min(open, close),
-      close: close
-    });
-  }
-  if (timeframe === 'D') return dailyCandles;
-
-  const grouped = {};
-  for (const c of dailyCandles) {
-    const d = new Date(c.time);
-    let key;
-    if (timeframe === 'M') {
-      key = c.time.slice(0, 7) + '-01';
-    } else {
-      const day = d.getDay();
-      const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-      const monday = new Date(d.setDate(diff));
-      key = monday.toISOString().split('T').at(0);
-    }
-    if (!grouped[key]) {
-      grouped[key] = { time: c.time, open: c.open, high: c.high, low: c.low, close: c.close };
-    } else {
-      grouped[key].time = c.time;
-      grouped[key].high = Math.max(grouped[key].high, c.high);
-      grouped[key].low = Math.min(grouped[key].low, c.low);
-      grouped[key].close = c.close;
-    }
-  }
-  return Object.values(grouped);
+function toAlignedNavSeries(targetDict, alignedDates) {
+  return alignedDates.map(d => {
+    const val = targetDict[d];
+    return val !== undefined ? { time: d, value: val } : { time: d };
+  });
 }
 
-// 依照基金交易日基準對齊基準指數，確保三張圖的 X 軸時間點數量 100% 一致（保證放大縮小完全同步）
 function toAlignedPctSeries(targetDict, alignedDates) {
   const validDates = alignedDates.filter(d => targetDict[d] !== undefined);
   if (validDates.length === 0) return [];
@@ -418,7 +494,7 @@ function toAlignedPctSeries(targetDict, alignedDates) {
     const val = targetDict[d];
     return val !== undefined
       ? { time: d, value: ((val - base) / base) * 100 }
-      : { time: d }; // 缺值日保留時間點佔位，維持三圖時間軸索引完全對齊
+      : { time: d };
   });
 }
 
@@ -439,43 +515,56 @@ function toAlignedSpreadSeries(fundDict, benchDict, alignedDates) {
 
 function renderAll() {
   if (!rawData) return;
-  const fundName = document.getElementById('fundSelect').value;
-  const tf = document.getElementById('timeframeSelect').value;
   const start = document.getElementById('startDate').value;
   const end = document.getElementById('endDate').value;
 
-  document.getElementById('klineTitle').innerText = `${fundName} — 淨值 K 線圖（白粗線：連漲後急跌-5%｜亮綠粗線：連跌超-5%）`;
+  document.getElementById('klineTitle').innerText = `三檔基金淨值總覽（目前焦點：${activeFund}）`;
 
-  const fundDict = rawData.funds[fundName] || {};
-  // 取得全歷史排序（用於精準計算起漲點前 5/30/60/90 個交易日的漲跌幅，不會因畫面起始日而顯示空值）
-  const allSortedEntries = Object.entries(fundDict).sort((a, b) => a.at(0).localeCompare(b.at(0)));
-  const fullIndexMap = Object.fromEntries(allSortedEntries.map(([d], idx) => [d, idx]));
+  // 收集三檔基金在區間內的所有聯集日期，作為三張圖的統一對齊時間軸
+  const unionDateSet = new Set();
+  for (const fName of Object.keys(TOP_FUND_CONFIG)) {
+    const dObj = rawData.funds[fName] || {};
+    for (const d of Object.keys(dObj)) {
+      if (d >= start && d <= end) unionDateSet.add(d);
+    }
+  }
+  const alignedDates = Array.from(unionDateSet).sort((a, b) => a.localeCompare(b));
 
-  const filteredEntries = allSortedEntries.filter(([d]) => d >= start && d <= end);
-  const alignedDates = filteredEntries.map(([d]) => d);
+  // 1. 繪製最上方三檔基金走勢線
+  for (const fName of Object.keys(TOP_FUND_CONFIG)) {
+    const fDict = rawData.funds[fName] || {};
+    topFundSeriesMap[fName].setData(toAlignedNavSeries(fDict, alignedDates));
+  }
 
-  const candles = aggregateOHLC(filteredEntries, tf);
-  candleSeries.setData(candles);
+  // 2. 針對目前選中的 activeFund 計算型態粗線與五項漲跌幅
+  const activeDict = rawData.funds[activeFund] || {};
+  const allSortedActive = Object.entries(activeDict).sort((a, b) => a.at(0).localeCompare(b.at(0)));
+  const fullIndexMap = Object.fromEntries(allSortedActive.map(([d], idx) => [d, idx]));
+  const filteredActiveEntries = allSortedActive.filter(([d]) => d >= start && d <= end);
 
-  // 繪製白粗線與亮綠粗線標示（日線模式下最精準）
-  const patternTags = tf === 'D' ? (detectAndDrawPatterns(filteredEntries) || {}) : {};
+  const activeScaleId = TOP_FUND_CONFIG[activeFund].priceScaleId;
+  const patternTags = detectAndDrawPatterns(filteredActiveEntries, activeScaleId) || {};
 
-  // 計算每個日期的 (1)單日 (2)5日 (3)30日 (4)60日 (5)90日 漲跌幅
+  const fundPctList = toAlignedPctSeries(activeDict, alignedDates);
+  const spTwiiList = toAlignedSpreadSeries(activeDict, rawData.benchmarks['加權指數'] || {}, alignedDates);
+
   currentMetricsMap = {};
   const calcRet = (fullIdx, offset) => {
-    if (fullIdx - offset < 0) return null;
-    const prev = allSortedEntries.at(fullIdx - offset).at(1);
-    const curr = allSortedEntries.at(fullIdx).at(1);
+    if (fullIdx === undefined || fullIdx - offset < 0) return null;
+    const prev = allSortedActive.at(fullIdx - offset).at(1);
+    const curr = allSortedActive.at(fullIdx).at(1);
     return ((curr - prev) / prev) * 100;
   };
 
-  const fundPctList = toAlignedPctSeries(fundDict, alignedDates);
-  const spTwiiList = toAlignedSpreadSeries(fundDict, rawData.benchmarks['加權指數'] || {}, alignedDates);
-
   alignedDates.forEach((d, i) => {
     const fIdx = fullIndexMap[d];
+    const allNavs = {};
+    for (const fName of Object.keys(TOP_FUND_CONFIG)) {
+      allNavs[fName] = rawData.funds[fName]?.[d];
+    }
     currentMetricsMap[d] = {
-      nav: filteredEntries.at(i).at(1),
+      nav: activeDict[d],
+      allNavs,
       d1: calcRet(fIdx, 1),
       d5: calcRet(fIdx, 5),
       d30: calcRet(fIdx, 30),
@@ -487,14 +576,16 @@ function renderAll() {
     };
   });
 
+  // 3. 更新中間圖表（績效比較）
   lineSeriesMap['fund'].setData(fundPctList);
   for (const bName of ['加權指數', '台積電(2330)', '00935']) {
     lineSeriesMap[bName].setData(toAlignedPctSeries(rawData.benchmarks[bName] || {}, alignedDates));
   }
 
+  // 4. 更新最下方圖表（超額報酬價差，配色與中間圖一致）
   spreadSeriesMap['diff_twii'].setData(spTwiiList);
-  spreadSeriesMap['diff_2330'].setData(toAlignedSpreadSeries(fundDict, rawData.benchmarks['台積電(2330)'] || {}, alignedDates));
-  spreadSeriesMap['diff_00935'].setData(toAlignedSpreadSeries(fundDict, rawData.benchmarks['00935'] || {}, alignedDates));
+  spreadSeriesMap['diff_2330'].setData(toAlignedSpreadSeries(activeDict, rawData.benchmarks['台積電(2330)'] || {}, alignedDates));
+  spreadSeriesMap['diff_00935'].setData(toAlignedSpreadSeries(activeDict, rawData.benchmarks['00935'] || {}, alignedDates));
 
   klineChart.timeScale().fitContent();
   compareChart.timeScale().fitContent();
@@ -511,7 +602,7 @@ async function boot() {
     }
     rawData = await res.json();
     document.getElementById('updateTime').innerText = '最後更新：' + rawData.updated_at;
-    renderAll();
+    selectActiveFund('野村優質(累積)');
   } catch (err) {
     showError('⚠️ 載入資料發生錯誤：' + err.message);
   }
@@ -519,11 +610,6 @@ async function boot() {
 
 boot();
 </script>
-
-
-  
-
-
   
 </body>
 </html>
