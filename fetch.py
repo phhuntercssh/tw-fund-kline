@@ -8,16 +8,22 @@ import yfinance as yf
 
 FUNDS = {
     "野村台灣運籌": {
-        "isin": "TW000T3218Y2",
-        "sitca_corp": "A0032"
+        "code": "T3218Y",
+        "sitca_corp": "A0032",
+        "min_nav": 10.0,
+        "max_nav": 900.0
     },
     "野村優質(累積)": {
-        "isin": "TW000T3201Y8",
-        "sitca_corp": "A0032"
+        "code": "T3201Y",
+        "sitca_corp": "A0032",
+        "min_nav": 15.0,
+        "max_nav": 900.0
     },
     "施羅德台灣樂活A": {
-        "isin": "TW000T4209Y0",
-        "sitca_corp": "A0042"
+        "code": "T4209Y",
+        "sitca_corp": "A0042",
+        "min_nav": 10.0,
+        "max_nav": 120.0
     }
 }
 
@@ -73,16 +79,13 @@ def init_sitca_session(session):
     return url, parse_aspnet_hidden(r_get.text)
 
 
-def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, target_isins):
-    """查詢 SITCA 指定投信在單一日期 (YYYYMMDD) 的官方淨值（精準比對 6 碼代號）"""
+def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code_to_name):
+    """
+    嚴格鎖定 SITCA 表格固定欄位位置：
+    cells=投信代號, cells=基金6碼代號(如T3218Y), cells=幣別(TWD), cells=當日淨值
+    """
     d_compact = target_dt.strftime("%Y%m%d")
     d_iso = target_dt.strftime("%Y-%m-%d")
-
-    code_to_isin = {}
-    for isin in target_isins:
-        code_to_isin[isin] = isin
-        if isin.startswith("TW000") and len(isin) >= 11:
-            code_to_isin[isin[5:11]] = isin
 
     post_data = dict(hidden_fields)
     post_data["ctl00$ContentPlaceHolder1$txtQ_Date"] = d_compact
@@ -108,32 +111,30 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, targ
                 if len(cells) < 8:
                     continue
 
-                matched_isin = None
-                for cell in cells[:6]:
-                    if cell in code_to_isin:
-                        matched_isin = code_to_isin[cell]
-                        break
+                # 嚴格檢查投信代號、基金代號與台幣計價
+                row_corp = cells
+                row_code = cells
+                row_curr = cells
+                row_nav_str = cells.replace(",", "")
 
-                if not matched_isin:
-                    continue
-
-                for cell in cells[6:]:
-                    if re.match(r"^[\d,]+\.\d{2,4}$", cell):
-                        try:
-                            v = float(cell.replace(",", ""))
-                            if v > 0:
-                                found_navs[matched_isin] = (d_iso, round(v, 4))
-                                break
-                        except ValueError:
-                            pass
+                if row_corp == corp_id and row_code in code_to_name and row_curr == "TWD":
+                    try:
+                        val = float(row_nav_str)
+                        f_name = code_to_name[row_code]
+                        cfg = FUNDS[f_name]
+                        if cfg["min_nav"] <= val <= cfg["max_nav"]:
+                            found_navs[f_name] = (d_iso, round(val, 4))
+                    except ValueError:
+                        pass
             break
         except Exception as e:
             if attempt == 0:
                 time.sleep(1.5)
             else:
-                print(f"    [SITCA單日異常 {corp_id} {d_iso}] {e}", flush=True)
+                print(f"    [SITCA異常 {corp_id} {d_iso}] {e}", flush=True)
 
     return found_navs, hidden_fields
+
 
 
 
@@ -268,7 +269,7 @@ def main():
         corps.setdefault(corp_id, {})[name] = merged_all[name]
 
     for corp_id, corp_funds_map in corps.items():
-        backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=105)
+        backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18)
         save_progress(merged_all, existing_benchmarks)
 
     benchmarks_out = dict(existing_benchmarks)
