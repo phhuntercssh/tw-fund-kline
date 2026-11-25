@@ -69,9 +69,9 @@
 <div class="chart-title">
   <span>超額報酬差值（Alpha Spread %）— 數值大於 0% 代表基金跑贏對照標的</span>
   <div class="legend">
-    <span style="color:#4caf50;">● 基金漲跌幅 − 大盤漲跌幅</span>
-    <span style="color:#ab47bc;">● 基金漲跌幅 − 台積電漲跌幅</span>
-    <span style="color:#ffd54f;">● 基金漲跌幅 − 00935漲跌幅</span>
+    <span style="color:#2962ff;">● 基金漲跌幅 − 大盤漲跌幅</span>
+    <span style="color:#e91e63;">● 基金漲跌幅 − 台積電漲跌幅</span>
+    <span style="color:#00bcd4;">● 基金漲跌幅 − 00935漲跌幅</span>
   </div>
 </div>
 <div id="spread-chart" class="chart-box"></div>
@@ -663,19 +663,37 @@ function renderAll() {
 
   // 3. 更新中間圖表（績效比較）
   lineSeriesMap['fund'].setData(fundPctList);
+  const benchPctMaps = {};
   for (const bName of ['加權指數', '台積電(2330)', '00935']) {
-    lineSeriesMap[bName].setData(toAlignedPctSeries(rawData.benchmarks[bName] || {}, alignedDates));
+    const bList = toAlignedPctSeries(rawData.benchmarks[bName] || {}, alignedDates);
+    lineSeriesMap[bName].setData(bList);
+    benchPctMaps[bName] = Object.fromEntries(bList.filter(p => p.value !== undefined).map(p => [p.time, p.value]));
   }
 
-  // 4. 更新最下方圖表（超額報酬價差，配色與中間圖一致）
-  spreadSeriesMap['diff_twii'].setData(spTwiiList);
-  spreadSeriesMap['diff_2330'].setData(toAlignedSpreadSeries(activeDict, rawData.benchmarks['台積電(2330)'] || {}, alignedDates));
-  spreadSeriesMap['diff_00935'].setData(toAlignedSpreadSeries(activeDict, rawData.benchmarks['00935'] || {}, alignedDates));
+  // 4. 更新最下方圖表：嚴格等於「中間圖表基金報酬% － 中間圖表基準報酬%」
+  const buildExactSpread = (bName) => {
+    return alignedDates.map(d => {
+      const fVal = currentMetricsMap[d]?.cumPct;
+      const bVal = benchPctMaps[bName]?.[d];
+      return (fVal !== undefined && bVal !== undefined)
+        ? { time: d, value: fVal - bVal }
+        : { time: d };
+    });
+  };
 
-  klineChart.timeScale().fitContent();
-  compareChart.timeScale().fitContent();
-  spreadChart.timeScale().fitContent();
-}
+  const spTwiiList = buildExactSpread('加權指數');
+  const sp2330List = buildExactSpread('台積電(2330)');
+  const sp00935List = buildExactSpread('00935');
+
+  spreadSeriesMap['diff_twii'].setData(spTwiiList);
+  spreadSeriesMap['diff_2330'].setData(sp2330List);
+  spreadSeriesMap['diff_00935'].setData(sp00935List);
+
+  // 同步更新 Tooltip 查詢的價差數值
+  spTwiiList.forEach(p => {
+    if (currentMetricsMap[p.time]) currentMetricsMap[p.time].spreadTwii = p.value;
+  });
+
 
 async function boot() {
   initCharts();
