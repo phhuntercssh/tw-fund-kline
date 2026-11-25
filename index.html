@@ -81,13 +81,9 @@ let rawData = null;
 let klineChart, candleSeries, compareChart, spreadChart;
 let lineSeriesMap = {};
 let spreadSeriesMap = {};
+let patternSeriesList = []; // 存放白粗線與亮綠粗線標示序列
 
-// 儲存目前畫面上各序列的完整資料（供跨圖表滑鼠懸停 Tooltip 查詢）
-let currentSeriesData = {
-  candles: {},
-  compare: { fund: {}, '加權指數': {}, '台積電(2330)': {}, '00935': {} },
-  spread: { diff_twii: {}, diff_2330: {}, diff_00935: {} }
-};
+let currentMetricsMap = {}; // 儲存每日各項漲跌幅與淨值供 Tooltip 查詢
 
 document.getElementById('endDate').value = new Date().toISOString().split('T').at(0);
 
@@ -145,37 +141,43 @@ function initCharts() {
     title: '0% 基準'
   });
 
-  // 三張圖表「實際日期時間軸」100% 垂直同步
+  // ==========================================
+  // 功能 1：三張圖表「放大縮小、左右拖曳」100% 同步
+  // ==========================================
   const charts = [klineChart, compareChart, spreadChart];
-  let isSyncingTime = false;
+  let isSyncingRange = false;
 
   charts.forEach((sourceChart, idx) => {
-    sourceChart.timeScale().subscribeVisibleTimeRangeChange(timeRange => {
-      if (isSyncingTime || !timeRange) return;
-      isSyncingTime = true;
+    sourceChart.timeScale().subscribeVisibleLogicalRangeChange(logicalRange => {
+      if (isSyncingRange || !logicalRange) return;
+      isSyncingRange = true;
       charts.forEach((targetChart, targetIdx) => {
         if (idx !== targetIdx) {
-          try {
-            targetChart.timeScale().setVisibleRange(timeRange);
-          } catch (e) {}
+          targetChart.timeScale().setVisibleLogicalRange(logicalRange);
         }
       });
-      isSyncingTime = false;
+      isSyncingRange = false;
     });
   });
 
-  // 滑鼠移動點上「三圖同步十字準線 ＋ 顯示完整數值浮動框」
+  // ==========================================
+  // 功能 2：滑鼠移動點上依序顯示 (1)單日 (2)5日 (3)30日 (4)60日 (5)90日 漲跌幅
+  // ==========================================
   const tooltip = document.createElement('div');
   tooltip.style.cssText = `
     position: fixed; display: none; pointer-events: none; z-index: 9999;
-    background: rgba(24, 28, 39, 0.94); color: #e0e3eb;
+    background: rgba(20, 24, 34, 0.95); color: #e0e3eb;
     border: 1px solid #485c7b; border-radius: 6px; padding: 10px 14px;
-    font-size: 12.5px; line-height: 1.65; box-shadow: 0 6px 18px rgba(0,0,0,0.45);
-    min-width: 210px;
+    font-size: 13px; line-height: 1.7; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+    min-width: 225px;
   `;
   document.body.appendChild(tooltip);
 
-  const fmtPct = (v) => v !== undefined ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '--';
+  const fmtPctColor = (v) => {
+    if (v === null || v === undefined || Number.isNaN(v)) return '<span style="color:#787b86;">--</span>';
+    const color = v > 0 ? '#ef5350' : (v < 0 ? '#26a69a' : '#d1d4dc');
+    return `<b style="color:${color};">${v >= 0 ? '+' : ''}${v.toFixed(2)}%</b>`;
+  };
 
   charts.forEach((sourceChart, sourceIdx) => {
     sourceChart.subscribeCrosshairMove(param => {
@@ -189,52 +191,44 @@ function initCharts() {
         ? param.time
         : `${param.time.year}-${String(param.time.month).padStart(2, '0')}-${String(param.time.day).padStart(2, '0')}`;
 
-      if (sourceIdx !== 0 && currentSeriesData.candles[dateStr]) {
-        klineChart.setCrosshairPosition(currentSeriesData.candles[dateStr].close, dateStr, candleSeries);
+      const m = currentMetricsMap[dateStr];
+      if (!m) return;
+
+      // 同步其他兩張圖的十字準線
+      if (sourceIdx !== 0 && m.nav !== undefined) {
+        klineChart.setCrosshairPosition(m.nav, dateStr, candleSeries);
       }
-      if (sourceIdx !== 1 && currentSeriesData.compare.fund[dateStr] !== undefined) {
-        compareChart.setCrosshairPosition(currentSeriesData.compare.fund[dateStr], dateStr, lineSeriesMap['fund']);
+      if (sourceIdx !== 1 && m.cumPct !== undefined) {
+        compareChart.setCrosshairPosition(m.cumPct, dateStr, lineSeriesMap['fund']);
       }
-      if (sourceIdx !== 2 && currentSeriesData.spread.diff_twii[dateStr] !== undefined) {
-        spreadChart.setCrosshairPosition(currentSeriesData.spread.diff_twii[dateStr], dateStr, spreadSeriesMap['diff_twii']);
+      if (sourceIdx !== 2 && m.spreadTwii !== undefined) {
+        spreadChart.setCrosshairPosition(m.spreadTwii, dateStr, spreadSeriesMap['diff_twii']);
       }
 
       const fundName = document.getElementById('fundSelect').value;
-      const candle = currentSeriesData.candles[dateStr];
-      const cmp = currentSeriesData.compare;
-      const spd = currentSeriesData.spread;
+      let html = `
+        <div style="font-weight:bold; font-size:13.5px; color:#fff; border-bottom:1px solid #363a45; padding-bottom:4px; margin-bottom:6px;">
+          📅 ${dateStr} <span style="font-weight:normal; color:#ff9800; float:right;">淨值 ${m.nav.toFixed(2)}</span>
+        </div>
+        <div style="font-size:11.5px; color:#9598a1; margin-bottom:2px;">【${fundName} 區間漲跌幅】</div>
+        <div>(1) 單日漲跌幅：${fmtPctColor(m.d1)}</div>
+        <div>(2) 5日漲跌幅：${fmtPctColor(m.d5)}</div>
+        <div>(3) 30日漲跌幅：${fmtPctColor(m.d30)}</div>
+        <div>(4) 60日漲跌幅：${fmtPctColor(m.d60)}</div>
+        <div>(5) 90日漲跌幅：${fmtPctColor(m.d90)}</div>
+      `;
 
-      let html = `<div style="font-weight:bold; font-size:13.5px; color:#fff; border-bottom:1px solid #363a45; padding-bottom:4px; margin-bottom:6px;">📅 ${dateStr}</div>`;
-
-      if (candle) {
-        html += `<div style="margin-bottom:6px;">
-          <div style="color:#9598a1; font-size:11px;">【${fundName} 淨值】</div>
-          <div>收盤：<b>${candle.close.toFixed(2)}</b> <span style="color:#9598a1;">(開 ${candle.open.toFixed(2)})</span></div>
-        </div>`;
+      if (m.patternTag) {
+        html += `<div style="margin-top:6px; padding-top:5px; border-top:1px dashed #485c7b; font-size:12px;">${m.patternTag}</div>`;
       }
-
-      html += `<div style="margin-bottom:6px;">
-        <div style="color:#9598a1; font-size:11px;">【區間累計報酬】</div>
-        <div><span style="color:#ff9800;">●</span> ${fundName}：<b>${fmtPct(cmp.fund[dateStr])}</b></div>
-        <div><span style="color:#2962ff;">●</span> 加權指數：<b>${fmtPct(cmp['加權指數'][dateStr])}</b></div>
-        <div><span style="color:#e91e63;">●</span> 台積電(2330)：<b>${fmtPct(cmp['台積電(2330)'][dateStr])}</b></div>
-        <div><span style="color:#00bcd4;">●</span> 00935：<b>${fmtPct(cmp['00935'][dateStr])}</b></div>
-      </div>`;
-
-      html += `<div>
-        <div style="color:#9598a1; font-size:11px;">【基金超額報酬差】</div>
-        <div><span style="color:#4caf50;">●</span> vs 加權：<b>${fmtPct(spd.diff_twii[dateStr])}</b></div>
-        <div><span style="color:#ab47bc;">●</span> vs 台積電：<b>${fmtPct(spd.diff_2330[dateStr])}</b></div>
-        <div><span style="color:#ffd54f;">●</span> vs 00935：<b>${fmtPct(spd.diff_00935[dateStr])}</b></div>
-      </div>`;
 
       tooltip.innerHTML = html;
       tooltip.style.display = 'block';
 
       const mouseX = param.sourceEvent ? param.sourceEvent.clientX : 0;
       const mouseY = param.sourceEvent ? param.sourceEvent.clientY : 0;
-      const boxW = 240;
-      const boxH = tooltip.offsetHeight || 260;
+      const boxW = 245;
+      const boxH = tooltip.offsetHeight || 220;
       const leftPos = (mouseX + boxW + 20 > window.innerWidth) ? (mouseX - boxW - 15) : (mouseX + 16);
       const topPos = (mouseY + boxH + 20 > window.innerHeight) ? Math.max(10, window.innerHeight - boxH - 15) : (mouseY + 16);
       tooltip.style.left = leftPos + 'px';
@@ -243,6 +237,137 @@ function initCharts() {
   });
 }
 
+
+
+// ==========================================
+// 功能 3 & 4：偵測「白粗線（連漲中斷<=4次後急跌-5%）」與「亮綠粗線（連跌超-5%中斷<=4次）」
+// ==========================================
+function detectAndDrawPatterns(entries) {
+  // 清除舊的粗線標示
+  for (const s of patternSeriesList) {
+    try { klineChart.removeSeries(s); } catch (e) {}
+  }
+  patternSeriesList = [];
+
+  if (entries.length < 3) return;
+
+  const whiteSegments = []; // 白粗線：連漲波段（允許中斷3~5次）接單日大跌 <= -5%
+  const greenSegments = []; // 亮綠粗線：連跌波段（允許中斷3~5次）累計跌幅 <= -5%
+  const tagMap = {};
+
+  // 1. 偵測「白粗線」：找尋單日大跌 <= -5% 的轉折日，並往前追溯其連漲波段（容許最多 4 次下跌中斷）
+  for (let i = 1; i < entries.length; i++) {
+    const prevNav = entries.at(i - 1).at(1);
+    const currNav = entries.at(i).at(1);
+    const dailyRet = ((currNav - prevNav) / prevNav) * 100;
+
+    if (dailyRet <= -5.0) {
+      let startIdx = i - 1;
+      let downInterrupts = 0;
+      let peakNav = prevNav;
+
+      // 往前追溯連漲波段，容許最多 4 次（3~5次範圍內）小幅回檔中斷
+      for (let j = i - 1; j >= 1; j--) {
+        const dPrev = entries.at(j - 1).at(1);
+        const dCurr = entries.at(j).at(1);
+        if (dCurr >= dPrev) {
+          startIdx = j - 1;
+        } else {
+          downInterrupts++;
+          if (downInterrupts > 4) break;
+          // 若回檔跌破更早之前的起漲點太多（超過3%），視為波段已破壞
+          if (dPrev < peakNav * 0.90) break;
+          startIdx = j - 1;
+        }
+      }
+
+      const startNav = entries.at(startIdx).at(1);
+      const runUpPct = ((peakNav - startNav) / startNav) * 100;
+
+      // 確認前面確實是一段上漲波段（至少上漲超過 2% 且包含大跌當日）
+      if (startIdx < i - 1 && runUpPct >= 2.0) {
+        const seg = entries.slice(startIdx, i + 1).map(([d, v]) => ({ time: d, value: v }));
+        whiteSegments.push(seg);
+        const crashDate = entries.at(i).at(0);
+        tagMap[crashDate] = `<span style="color:#ffffff;">⬜ <b>白粗線警示</b></span>：波段連漲 +${runUpPct.toFixed(1)}% 後急跌 <b>${dailyRet.toFixed(2)}%</b>`;
+      }
+    }
+  }
+
+  // 2. 偵測「亮綠粗線」：連續下跌波段（允許最多 4 次反彈中斷），波段累計跌幅 <= -5%
+  let idx = 0;
+  while (idx < entries.length - 1) {
+    if (entries.at(idx + 1).at(1) < entries.at(idx).at(1)) {
+      let startIdx = idx;
+      let endIdx = idx + 1;
+      let upInterrupts = 0;
+      const peakNav = entries.at(startIdx).at(1);
+      let troughNav = entries.at(endIdx).at(1);
+
+      for (let j = idx + 1; j < entries.length - 1; j++) {
+        const nextNav = entries.at(j + 1).at(1);
+        const currNav = entries.at(j).at(1);
+        if (nextNav < currNav) {
+          endIdx = j + 1;
+          if (nextNav < troughNav) troughNav = nextNav;
+        } else {
+          upInterrupts++;
+          // 允許中斷 3~5 次（設為 4 次），且反彈不能突破起跌高點
+          if (upInterrupts > 4 || nextNav >= peakNav) break;
+          endIdx = j + 1;
+        }
+      }
+
+      // 裁切掉尾端無效的反彈日，讓亮綠線精準停在波段最低點
+      while (endIdx > startIdx && entries.at(endIdx).at(1) > troughNav) {
+        endIdx--;
+      }
+
+      const totalDropPct = ((troughNav - peakNav) / peakNav) * 100;
+      if (endIdx > startIdx && totalDropPct <= -5.0) {
+        const seg = entries.slice(startIdx, endIdx + 1).map(([d, v]) => ({ time: d, value: v }));
+        greenSegments.push(seg);
+        for (let k = startIdx; k <= endIdx; k++) {
+          const dStr = entries.at(k).at(0);
+          if (!tagMap[dStr]) {
+            tagMap[dStr] = `<span style="color:#00e676;">🟩 <b>亮綠粗線區間</b></span>：波段累計下跌 <b>${totalDropPct.toFixed(2)}%</b>`;
+          }
+        }
+        idx = endIdx + 1;
+        continue;
+      }
+    }
+    idx++;
+  }
+
+  // 繪製亮綠粗線（先畫底層）
+  for (const seg of greenSegments) {
+    const s = klineChart.addLineSeries({
+      color: '#00e676',
+      lineWidth: 4,
+      crosshairMarkerVisible: false,
+      lastValueVisible: false,
+      priceLineVisible: false
+    });
+    s.setData(seg);
+    patternSeriesList.push(s);
+  }
+
+  // 繪製白粗線（疊加在最上層突顯急跌轉折）
+  for (const seg of whiteSegments) {
+    const s = klineChart.addLineSeries({
+      color: '#ffffff',
+      lineWidth: 4,
+      crosshairMarkerVisible: false,
+      lastValueVisible: false,
+      priceLineVisible: false
+    });
+    s.setData(seg);
+    patternSeriesList.push(s);
+  }
+
+  return tagMap;
+}
 
 function aggregateOHLC(entries, timeframe) {
   const dailyCandles = [];
@@ -284,26 +409,31 @@ function aggregateOHLC(entries, timeframe) {
   return Object.values(grouped);
 }
 
-function toPctSeries(dict, start, end) {
-  const filtered = Object.entries(dict)
-    .filter(([d]) => d >= start && d <= end)
-    .sort((a, b) => a.at(0).localeCompare(b.at(0)));
-  if (filtered.length === 0) return [];
-  const base = filtered.at(0).at(1);
-  return filtered.map(([d, v]) => ({ time: d, value: ((v - base) / base) * 100 }));
+// 依照基金交易日基準對齊基準指數，確保三張圖的 X 軸時間點數量 100% 一致（保證放大縮小完全同步）
+function toAlignedPctSeries(targetDict, alignedDates) {
+  const validDates = alignedDates.filter(d => targetDict[d] !== undefined);
+  if (validDates.length === 0) return [];
+  const base = targetDict[validDates.at(0)];
+  return alignedDates.map(d => {
+    const val = targetDict[d];
+    return val !== undefined
+      ? { time: d, value: ((val - base) / base) * 100 }
+      : { time: d }; // 缺值日保留時間點佔位，維持三圖時間軸索引完全對齊
+  });
 }
 
-function toSpreadSeries(fundDict, benchDict, start, end) {
-  const commonDates = Object.keys(fundDict)
-    .filter(d => d >= start && d <= end && benchDict[d] !== undefined)
-    .sort((a, b) => a.localeCompare(b));
-  if (commonDates.length === 0) return [];
-  const fundBase = fundDict[commonDates.at(0)];
-  const benchBase = benchDict[commonDates.at(0)];
-  return commonDates.map(d => {
-    const fundPct = ((fundDict[d] - fundBase) / fundBase) * 100;
-    const benchPct = ((benchDict[d] - benchBase) / benchBase) * 100;
-    return { time: d, value: fundPct - benchPct };
+function toAlignedSpreadSeries(fundDict, benchDict, alignedDates) {
+  const validDates = alignedDates.filter(d => fundDict[d] !== undefined && benchDict[d] !== undefined);
+  if (validDates.length === 0) return [];
+  const fundBase = fundDict[validDates.at(0)];
+  const benchBase = benchDict[validDates.at(0)];
+  return alignedDates.map(d => {
+    if (fundDict[d] !== undefined && benchDict[d] !== undefined) {
+      const fundPct = ((fundDict[d] - fundBase) / fundBase) * 100;
+      const benchPct = ((benchDict[d] - benchBase) / benchBase) * 100;
+      return { time: d, value: fundPct - benchPct };
+    }
+    return { time: d };
   });
 }
 
@@ -314,51 +444,61 @@ function renderAll() {
   const start = document.getElementById('startDate').value;
   const end = document.getElementById('endDate').value;
 
-  document.getElementById('klineTitle').innerText = `${fundName} — 淨值 K 線圖`;
+  document.getElementById('klineTitle').innerText = `${fundName} — 淨值 K 線圖（白粗線：連漲後急跌-5%｜亮綠粗線：連跌超-5%）`;
 
   const fundDict = rawData.funds[fundName] || {};
-  const filteredEntries = Object.entries(fundDict)
-    .filter(([d]) => d >= start && d <= end)
-    .sort((a, b) => a.at(0).localeCompare(b.at(0)));
+  // 取得全歷史排序（用於精準計算起漲點前 5/30/60/90 個交易日的漲跌幅，不會因畫面起始日而顯示空值）
+  const allSortedEntries = Object.entries(fundDict).sort((a, b) => a.at(0).localeCompare(b.at(0)));
+  const fullIndexMap = Object.fromEntries(allSortedEntries.map(([d], idx) => [d, idx]));
+
+  const filteredEntries = allSortedEntries.filter(([d]) => d >= start && d <= end);
+  const alignedDates = filteredEntries.map(([d]) => d);
 
   const candles = aggregateOHLC(filteredEntries, tf);
   candleSeries.setData(candles);
-  currentSeriesData.candles = Object.fromEntries(candles.map(c => [c.time, c]));
 
-  const fundPct = toPctSeries(fundDict, start, end);
-  lineSeriesMap['fund'].setData(fundPct);
-  currentSeriesData.compare.fund = Object.fromEntries(fundPct.map(p => [p.time, p.value]));
+  // 繪製白粗線與亮綠粗線標示（日線模式下最精準）
+  const patternTags = tf === 'D' ? (detectAndDrawPatterns(filteredEntries) || {}) : {};
 
+  // 計算每個日期的 (1)單日 (2)5日 (3)30日 (4)60日 (5)90日 漲跌幅
+  currentMetricsMap = {};
+  const calcRet = (fullIdx, offset) => {
+    if (fullIdx - offset < 0) return null;
+    const prev = allSortedEntries.at(fullIdx - offset).at(1);
+    const curr = allSortedEntries.at(fullIdx).at(1);
+    return ((curr - prev) / prev) * 100;
+  };
+
+  const fundPctList = toAlignedPctSeries(fundDict, alignedDates);
+  const spTwiiList = toAlignedSpreadSeries(fundDict, rawData.benchmarks['加權指數'] || {}, alignedDates);
+
+  alignedDates.forEach((d, i) => {
+    const fIdx = fullIndexMap[d];
+    currentMetricsMap[d] = {
+      nav: filteredEntries.at(i).at(1),
+      d1: calcRet(fIdx, 1),
+      d5: calcRet(fIdx, 5),
+      d30: calcRet(fIdx, 30),
+      d60: calcRet(fIdx, 60),
+      d90: calcRet(fIdx, 90),
+      cumPct: fundPctList.at(i)?.value,
+      spreadTwii: spTwiiList.at(i)?.value,
+      patternTag: patternTags[d] || ''
+    };
+  });
+
+  lineSeriesMap['fund'].setData(fundPctList);
   for (const bName of ['加權指數', '台積電(2330)', '00935']) {
-    const bPct = toPctSeries(rawData.benchmarks[bName] || {}, start, end);
-    lineSeriesMap[bName].setData(bPct);
-    currentSeriesData.compare[bName] = Object.fromEntries(bPct.map(p => [p.time, p.value]));
+    lineSeriesMap[bName].setData(toAlignedPctSeries(rawData.benchmarks[bName] || {}, alignedDates));
   }
 
-  const spTwii = toSpreadSeries(fundDict, rawData.benchmarks['加權指數'] || {}, start, end);
-  const sp2330 = toSpreadSeries(fundDict, rawData.benchmarks['台積電(2330)'] || {}, start, end);
-  const sp00935 = toSpreadSeries(fundDict, rawData.benchmarks['00935'] || {}, start, end);
+  spreadSeriesMap['diff_twii'].setData(spTwiiList);
+  spreadSeriesMap['diff_2330'].setData(toAlignedSpreadSeries(fundDict, rawData.benchmarks['台積電(2330)'] || {}, alignedDates));
+  spreadSeriesMap['diff_00935'].setData(toAlignedSpreadSeries(fundDict, rawData.benchmarks['00935'] || {}, alignedDates));
 
-  spreadSeriesMap['diff_twii'].setData(spTwii);
-  spreadSeriesMap['diff_2330'].setData(sp2330);
-  spreadSeriesMap['diff_00935'].setData(sp00935);
-
-  currentSeriesData.spread.diff_twii = Object.fromEntries(spTwii.map(p => [p.time, p.value]));
-  currentSeriesData.spread.diff_2330 = Object.fromEntries(sp2330.map(p => [p.time, p.value]));
-  currentSeriesData.spread.diff_00935 = Object.fromEntries(sp00935.map(p => [p.time, p.value]));
-
-  // 統一對齊三張圖的可視日期範圍
   klineChart.timeScale().fitContent();
-  const alignedRange = klineChart.timeScale().getVisibleRange();
-  if (alignedRange) {
-    try {
-      compareChart.timeScale().setVisibleRange(alignedRange);
-      spreadChart.timeScale().setVisibleRange(alignedRange);
-    } catch (e) {
-      compareChart.timeScale().fitContent();
-      spreadChart.timeScale().fitContent();
-    }
-  }
+  compareChart.timeScale().fitContent();
+  spreadChart.timeScale().fitContent();
 }
 
 async function boot() {
@@ -380,6 +520,8 @@ async function boot() {
 boot();
 </script>
 
+
+  
 
 
   
