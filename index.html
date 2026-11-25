@@ -242,7 +242,6 @@ function buildTopFundSelectorBar() {
 
 
 
-
 function initCharts() {
   buildDateRangeQuickButtons();
   buildTopFundSelectorBar();
@@ -346,15 +345,15 @@ function initCharts() {
   const tooltip = document.createElement('div');
   tooltip.style.cssText = `
     position: fixed; display: none; pointer-events: none; z-index: 9999;
-    background: rgba(20, 24, 34, 0.95); color: #e0e3eb;
-    border: 1px solid #485c7b; border-radius: 6px; padding: 10px 14px;
-    font-size: 13px; line-height: 1.65; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
-    min-width: 235px;
+    background: rgba(19, 23, 34, 0.96); color: #e0e3eb;
+    border: 1px solid #485c7b; border-radius: 6px; padding: 10px 12px;
+    font-size: 12.5px; line-height: 1.6; box-shadow: 0 8px 24px rgba(0,0,0,0.55);
+    min-width: 315px;
   `;
   document.body.appendChild(tooltip);
 
   const fmtPctColor = (v) => {
-    if (v === null || v === undefined || Number.isNaN(v)) return '<span style="color:#787b86;">--</span>';
+    if (v === null || v === undefined || Number.isNaN(v)) return '<span style="color:#6c7284;">--</span>';
     const color = v > 0 ? '#ef5350' : (v < 0 ? '#26a69a' : '#d1d4dc');
     return `<b style="color:${color};">${v >= 0 ? '+' : ''}${v.toFixed(2)}%</b>`;
   };
@@ -384,44 +383,65 @@ function initCharts() {
         spreadChart.setCrosshairPosition(m.spreadTwii, dateStr, spreadSeriesMap['diff_twii']);
       }
 
-      let navRowsHtml = '';
-      for (const [fName, cfg] of Object.entries(TOP_FUND_CONFIG)) {
-        const v = m.allNavs?.[fName];
-        const isCur = fName === activeFund;
-        navRowsHtml += `<div style="${isCur ? 'background:rgba(255,255,255,0.08); padding:0 4px; border-radius:3px;' : ''}">
-          <span style="color:${cfg.color};">●</span> ${fName}：<b>${v !== undefined ? v.toFixed(2) : '--'}</b>
-        </div>`;
-      }
+      const orderedTrios = [
+        { key: '野村台灣運籌', short: '運籌', color: '#ff9800' },
+        { key: '野村優質(累積)', short: '優質', color: '#ffd54f' },
+        { key: '施羅德台灣樂活A', short: '施羅德', color: '#ec407a' }
+      ];
 
-      let html = `
-        <div style="font-weight:bold; font-size:13.5px; color:#fff; border-bottom:1px solid #363a45; padding-bottom:4px; margin-bottom:6px;">
-          📅 ${dateStr}
-        </div>
-        <div style="margin-bottom:6px;">
-          <div style="color:#9598a1; font-size:11.5px;">【三檔基金淨值】</div>
-          ${navRowsHtml}
-        </div>
-        <div style="border-top:1px solid #363a45; padding-top:5px;">
-          <div style="color:#9598a1; font-size:11.5px;">【${activeFund} 漲跌幅】</div>
-          <div>(1) 單日漲跌幅：${fmtPctColor(m.d1)}</div>
-          <div>(2) 5日漲跌幅：${fmtPctColor(m.d5)}</div>
-          <div>(3) 30日漲跌幅：${fmtPctColor(m.d30)}</div>
-          <div>(4) 60日漲跌幅：${fmtPctColor(m.d60)}</div>
-          <div>(5) 90日漲跌幅：${fmtPctColor(m.d90)}</div>
-        </div>
+      const periods = [
+        { key: 'd1', label: '單日漲跌幅' },
+        { key: 'd5', label: '5日漲跌幅' },
+        { key: 'd30', label: '30日漲跌幅' },
+        { key: 'd60', label: '60日漲跌幅' },
+        { key: 'd90', label: '90日漲跌幅' },
+        { key: 'd120', label: '120日漲跌幅' }
+      ];
+
+      let tableHtml = `
+        <table style="width:100%; border-collapse:collapse; text-align:right; font-variant-numeric:tabular-nums;">
+          <thead>
+            <tr style="border-bottom:1px solid #363a45;">
+              <th style="text-align:left; padding:3px 6px 5px 0; color:#fff; font-size:13px;">📅 ${dateStr}</th>
+              ${orderedTrios.map(t => {
+                const isCur = t.key === activeFund;
+                const navV = m.allNavs?.[t.key];
+                return `<th style="padding:3px 5px 5px 5px; color:${t.color}; ${isCur ? 'background:rgba(255,255,255,0.08); border-radius:4px 4px 0 0;' : ''}">
+                  <div>● ${t.short}</div>
+                  <div style="font-size:11px; color:#9598a1; font-weight:normal;">${navV !== undefined ? navV.toFixed(2) : '--'}</div>
+                </th>`;
+              }).join('')}
+            </tr>
+          </thead>
+          <tbody>
       `;
 
-      if (m.patternTag) {
-        html += `<div style="margin-top:6px; padding-top:5px; border-top:1px dashed #485c7b; font-size:12px;">${m.patternTag}</div>`;
+      for (const p of periods) {
+        tableHtml += `<tr style="border-bottom:1px solid rgba(54,58,69,0.55);">
+          <td style="text-align:left; padding:4px 6px 4px 0; color:#b2b5be;">${p.label}</td>
+          ${orderedTrios.map(t => {
+            const isCur = t.key === activeFund;
+            const retVal = m.allRets?.[t.key]?.[p.key];
+            return `<td style="padding:4px 5px; ${isCur ? 'background:rgba(255,255,255,0.08);' : ''}">
+              ${fmtPctColor(retVal)}
+            </td>`;
+          }).join('')}
+        </tr>`;
       }
 
-      tooltip.innerHTML = html;
+      tableHtml += `</tbody></table>`;
+
+      if (m.patternTag) {
+        tableHtml += `<div style="margin-top:6px; padding-top:5px; border-top:1px dashed #485c7b; font-size:12px;">${m.patternTag}</div>`;
+      }
+
+      tooltip.innerHTML = tableHtml;
       tooltip.style.display = 'block';
 
       const mouseX = param.sourceEvent ? param.sourceEvent.clientX : 0;
       const mouseY = param.sourceEvent ? param.sourceEvent.clientY : 0;
-      const boxW = 260;
-      const boxH = tooltip.offsetHeight || 290;
+      const boxW = tooltip.offsetWidth || 325;
+      const boxH = tooltip.offsetHeight || 265;
       const leftPos = (mouseX + boxW + 20 > window.innerWidth) ? (mouseX - boxW - 15) : (mouseX + 16);
       const topPos = (mouseY + boxH + 20 > window.innerHeight) ? Math.max(10, window.innerHeight - boxH - 15) : (mouseY + 16);
       tooltip.style.left = leftPos + 'px';
@@ -430,11 +450,10 @@ function initCharts() {
   });
 }
 
-
-
-
-
   
+  
+
+
 function detectAndDrawPatterns(entries, targetPriceScaleId) {
   for (const s of patternSeriesList) {
     try { klineChart.removeSeries(s); } catch (e) {}
@@ -595,7 +614,6 @@ function renderAll() {
 
   const activeDict = rawData.funds[activeFund] || {};
   const allSortedActive = Object.entries(activeDict).sort((a, b) => a.at(0).localeCompare(b.at(0)));
-  const fullIndexMap = Object.fromEntries(allSortedActive.map(([d], idx) => [d, idx]));
   const filteredActiveEntries = allSortedActive.filter(([d]) => d >= start && d <= end);
 
   const activeScaleId = TOP_FUND_CONFIG[activeFund].priceScaleId;
@@ -603,28 +621,43 @@ function renderAll() {
 
   const fundPctList = toAlignedPctSeries(activeDict, alignedDates);
 
-  currentMetricsMap = {};
-  const calcRet = (fullIdx, offset) => {
-    if (fullIdx === undefined || fullIdx - offset < 0) return null;
-    const prev = allSortedActive.at(fullIdx - offset).at(1);
-    const curr = allSortedActive.at(fullIdx).at(1);
-    return ((curr - prev) / prev) * 100;
+  const fundFullMaps = {};
+  for (const fName of Object.keys(TOP_FUND_CONFIG)) {
+    const sortedArr = Object.entries(rawData.funds[fName] || {}).sort((a, b) => a.at(0).localeCompare(b.at(0)));
+    const idxMap = Object.fromEntries(sortedArr.map(([dt], idx) => [dt, idx]));
+    fundFullMaps[fName] = { sortedArr, idxMap };
+  }
+
+  const calcFundOffsetRet = (fInfo, curI, offset) => {
+    if (curI === undefined || curI - offset < 0) return null;
+    const prevV = fInfo.sortedArr.at(curI - offset).at(1);
+    const currV = fInfo.sortedArr.at(curI).at(1);
+    return ((currV - prevV) / prevV) * 100;
   };
 
+  currentMetricsMap = {};
   alignedDates.forEach((d, i) => {
-    const fIdx = fullIndexMap[d];
     const allNavs = {};
+    const allRets = {};
+
     for (const fName of Object.keys(TOP_FUND_CONFIG)) {
       allNavs[fName] = rawData.funds[fName]?.[d];
+      const fInfo = fundFullMaps[fName];
+      const curI = fInfo.idxMap[d];
+      allRets[fName] = {
+        d1: calcFundOffsetRet(fInfo, curI, 1),
+        d5: calcFundOffsetRet(fInfo, curI, 5),
+        d30: calcFundOffsetRet(fInfo, curI, 30),
+        d60: calcFundOffsetRet(fInfo, curI, 60),
+        d90: calcFundOffsetRet(fInfo, curI, 90),
+        d120: calcFundOffsetRet(fInfo, curI, 120)
+      };
     }
+
     currentMetricsMap[d] = {
       nav: activeDict[d],
       allNavs,
-      d1: calcRet(fIdx, 1),
-      d5: calcRet(fIdx, 5),
-      d30: calcRet(fIdx, 30),
-      d60: calcRet(fIdx, 60),
-      d90: calcRet(fIdx, 90),
+      allRets,
       cumPct: fundPctList.at(i)?.value,
       spreadTwii: undefined,
       patternTag: patternTags[d] || ''
@@ -686,7 +719,7 @@ async function boot() {
 
 boot();
 </script>
-  
+
   
 </body>
 </html>
