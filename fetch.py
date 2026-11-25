@@ -163,7 +163,7 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code
 
 def find_missing_gaps(corp_funds_map):
     """掃描現有資料中所有斷層空洞與最新交易日缺口，優先排入補齊"""
-    today_tw = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)).date()
+    today_tw = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)).date() - datetime.timedelta(days=1)
     gaps = []
     for f_name, records in corp_funds_map.items():
         if not records:
