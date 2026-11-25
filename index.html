@@ -82,6 +82,13 @@ let klineChart, candleSeries, compareChart, spreadChart;
 let lineSeriesMap = {};
 let spreadSeriesMap = {};
 
+// 儲存目前畫面上各序列的完整資料（供跨圖表滑鼠懸停 Tooltip 查詢）
+let currentSeriesData = {
+  candles: {},
+  compare: { fund: {}, '加權指數': {}, '台積電(2330)': {}, '00935': {} },
+  spread: { diff_twii: {}, diff_2330: {}, diff_00935: {} }
+};
+
 document.getElementById('endDate').value = new Date().toISOString().split('T').at(0);
 
 function showError(msg) {
@@ -94,10 +101,11 @@ function initCharts() {
   const commonOptions = {
     layout: { background: { color: '#1e222d' }, textColor: '#d1d4dc' },
     grid: { vertLines: { color: '#2b2b43' }, horzLines: { color: '#2b2b43' } },
-    timeScale: { timeVisible: true, borderColor: '#485c7b' },
+    timeScale: { timeVisible: false, borderColor: '#485c7b', rightOffset: 5 },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
 
+  // 1. 淨值 K 線圖
   klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), commonOptions);
   candleSeries = klineChart.addCandlestickSeries({
     upColor: '#ef5350', downColor: '#26a69a',
@@ -105,6 +113,7 @@ function initCharts() {
     wickUpColor: '#ef5350', wickDownColor: '#26a69a'
   });
 
+  // 2. 績效百分比比較圖
   compareChart = LightweightCharts.createChart(document.getElementById('compare-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(2) + '%' }
@@ -114,6 +123,7 @@ function initCharts() {
     lineSeriesMap[key] = compareChart.addLineSeries({ color, lineWidth: key === 'fund' ? 3 : 2 });
   }
 
+  // 3. 超額報酬價差圖
   spreadChart = LightweightCharts.createChart(document.getElementById('spread-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) + '%' }
@@ -135,18 +145,104 @@ function initCharts() {
     title: '0% 基準'
   });
 
+  // 三張圖表「實際日期時間軸」100% 垂直同步
   const charts = [klineChart, compareChart, spreadChart];
+  let isSyncingTime = false;
+
   charts.forEach((sourceChart, idx) => {
-    sourceChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (!range) return;
+    sourceChart.timeScale().subscribeVisibleTimeRangeChange(timeRange => {
+      if (isSyncingTime || !timeRange) return;
+      isSyncingTime = true;
       charts.forEach((targetChart, targetIdx) => {
         if (idx !== targetIdx) {
-          targetChart.timeScale().setVisibleLogicalRange(range);
+          try {
+            targetChart.timeScale().setVisibleRange(timeRange);
+          } catch (e) {}
         }
       });
+      isSyncingTime = false;
+    });
+  });
+
+  // 滑鼠移動點上「三圖同步十字準線 ＋ 顯示完整數值浮動框」
+  const tooltip = document.createElement('div');
+  tooltip.style.cssText = `
+    position: fixed; display: none; pointer-events: none; z-index: 9999;
+    background: rgba(24, 28, 39, 0.94); color: #e0e3eb;
+    border: 1px solid #485c7b; border-radius: 6px; padding: 10px 14px;
+    font-size: 12.5px; line-height: 1.65; box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+    min-width: 210px;
+  `;
+  document.body.appendChild(tooltip);
+
+  const fmtPct = (v) => v !== undefined ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` : '--';
+
+  charts.forEach((sourceChart, sourceIdx) => {
+    sourceChart.subscribeCrosshairMove(param => {
+      if (!param.point || !param.time || param.point.x < 0 || param.point.y < 0) {
+        tooltip.style.display = 'none';
+        charts.forEach((c, i) => { if (i !== sourceIdx) c.clearCrosshairPosition(); });
+        return;
+      }
+
+      const dateStr = typeof param.time === 'string'
+        ? param.time
+        : `${param.time.year}-${String(param.time.month).padStart(2, '0')}-${String(param.time.day).padStart(2, '0')}`;
+
+      if (sourceIdx !== 0 && currentSeriesData.candles[dateStr]) {
+        klineChart.setCrosshairPosition(currentSeriesData.candles[dateStr].close, dateStr, candleSeries);
+      }
+      if (sourceIdx !== 1 && currentSeriesData.compare.fund[dateStr] !== undefined) {
+        compareChart.setCrosshairPosition(currentSeriesData.compare.fund[dateStr], dateStr, lineSeriesMap['fund']);
+      }
+      if (sourceIdx !== 2 && currentSeriesData.spread.diff_twii[dateStr] !== undefined) {
+        spreadChart.setCrosshairPosition(currentSeriesData.spread.diff_twii[dateStr], dateStr, spreadSeriesMap['diff_twii']);
+      }
+
+      const fundName = document.getElementById('fundSelect').value;
+      const candle = currentSeriesData.candles[dateStr];
+      const cmp = currentSeriesData.compare;
+      const spd = currentSeriesData.spread;
+
+      let html = `<div style="font-weight:bold; font-size:13.5px; color:#fff; border-bottom:1px solid #363a45; padding-bottom:4px; margin-bottom:6px;">📅 ${dateStr}</div>`;
+
+      if (candle) {
+        html += `<div style="margin-bottom:6px;">
+          <div style="color:#9598a1; font-size:11px;">【${fundName} 淨值】</div>
+          <div>收盤：<b>${candle.close.toFixed(2)}</b> <span style="color:#9598a1;">(開 ${candle.open.toFixed(2)})</span></div>
+        </div>`;
+      }
+
+      html += `<div style="margin-bottom:6px;">
+        <div style="color:#9598a1; font-size:11px;">【區間累計報酬】</div>
+        <div><span style="color:#ff9800;">●</span> ${fundName}：<b>${fmtPct(cmp.fund[dateStr])}</b></div>
+        <div><span style="color:#2962ff;">●</span> 加權指數：<b>${fmtPct(cmp['加權指數'][dateStr])}</b></div>
+        <div><span style="color:#e91e63;">●</span> 台積電(2330)：<b>${fmtPct(cmp['台積電(2330)'][dateStr])}</b></div>
+        <div><span style="color:#00bcd4;">●</span> 00935：<b>${fmtPct(cmp['00935'][dateStr])}</b></div>
+      </div>`;
+
+      html += `<div>
+        <div style="color:#9598a1; font-size:11px;">【基金超額報酬差】</div>
+        <div><span style="color:#4caf50;">●</span> vs 加權：<b>${fmtPct(spd.diff_twii[dateStr])}</b></div>
+        <div><span style="color:#ab47bc;">●</span> vs 台積電：<b>${fmtPct(spd.diff_2330[dateStr])}</b></div>
+        <div><span style="color:#ffd54f;">●</span> vs 00935：<b>${fmtPct(spd.diff_00935[dateStr])}</b></div>
+      </div>`;
+
+      tooltip.innerHTML = html;
+      tooltip.style.display = 'block';
+
+      const mouseX = param.sourceEvent ? param.sourceEvent.clientX : 0;
+      const mouseY = param.sourceEvent ? param.sourceEvent.clientY : 0;
+      const boxW = 240;
+      const boxH = tooltip.offsetHeight || 260;
+      const leftPos = (mouseX + boxW + 20 > window.innerWidth) ? (mouseX - boxW - 15) : (mouseX + 16);
+      const topPos = (mouseY + boxH + 20 > window.innerHeight) ? Math.max(10, window.innerHeight - boxH - 15) : (mouseY + 16);
+      tooltip.style.left = leftPos + 'px';
+      tooltip.style.top = topPos + 'px';
     });
   });
 }
+
 
 function aggregateOHLC(entries, timeframe) {
   const dailyCandles = [];
@@ -225,20 +321,44 @@ function renderAll() {
     .filter(([d]) => d >= start && d <= end)
     .sort((a, b) => a.at(0).localeCompare(b.at(0)));
 
-  candleSeries.setData(aggregateOHLC(filteredEntries, tf));
+  const candles = aggregateOHLC(filteredEntries, tf);
+  candleSeries.setData(candles);
+  currentSeriesData.candles = Object.fromEntries(candles.map(c => [c.time, c]));
 
-  lineSeriesMap['fund'].setData(toPctSeries(fundDict, start, end));
+  const fundPct = toPctSeries(fundDict, start, end);
+  lineSeriesMap['fund'].setData(fundPct);
+  currentSeriesData.compare.fund = Object.fromEntries(fundPct.map(p => [p.time, p.value]));
+
   for (const bName of ['加權指數', '台積電(2330)', '00935']) {
-    lineSeriesMap[bName].setData(toPctSeries(rawData.benchmarks[bName] || {}, start, end));
+    const bPct = toPctSeries(rawData.benchmarks[bName] || {}, start, end);
+    lineSeriesMap[bName].setData(bPct);
+    currentSeriesData.compare[bName] = Object.fromEntries(bPct.map(p => [p.time, p.value]));
   }
 
-  spreadSeriesMap['diff_twii'].setData(toSpreadSeries(fundDict, rawData.benchmarks['加權指數'] || {}, start, end));
-  spreadSeriesMap['diff_2330'].setData(toSpreadSeries(fundDict, rawData.benchmarks['台積電(2330)'] || {}, start, end));
-  spreadSeriesMap['diff_00935'].setData(toSpreadSeries(fundDict, rawData.benchmarks['00935'] || {}, start, end));
+  const spTwii = toSpreadSeries(fundDict, rawData.benchmarks['加權指數'] || {}, start, end);
+  const sp2330 = toSpreadSeries(fundDict, rawData.benchmarks['台積電(2330)'] || {}, start, end);
+  const sp00935 = toSpreadSeries(fundDict, rawData.benchmarks['00935'] || {}, start, end);
 
+  spreadSeriesMap['diff_twii'].setData(spTwii);
+  spreadSeriesMap['diff_2330'].setData(sp2330);
+  spreadSeriesMap['diff_00935'].setData(sp00935);
+
+  currentSeriesData.spread.diff_twii = Object.fromEntries(spTwii.map(p => [p.time, p.value]));
+  currentSeriesData.spread.diff_2330 = Object.fromEntries(sp2330.map(p => [p.time, p.value]));
+  currentSeriesData.spread.diff_00935 = Object.fromEntries(sp00935.map(p => [p.time, p.value]));
+
+  // 統一對齊三張圖的可視日期範圍
   klineChart.timeScale().fitContent();
-  compareChart.timeScale().fitContent();
-  spreadChart.timeScale().fitContent();
+  const alignedRange = klineChart.timeScale().getVisibleRange();
+  if (alignedRange) {
+    try {
+      compareChart.timeScale().setVisibleRange(alignedRange);
+      spreadChart.timeScale().setVisibleRange(alignedRange);
+    } catch (e) {
+      compareChart.timeScale().fitContent();
+      spreadChart.timeScale().fitContent();
+    }
+  }
 }
 
 async function boot() {
@@ -259,5 +379,9 @@ async function boot() {
 
 boot();
 </script>
+
+
+
+  
 </body>
 </html>
