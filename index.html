@@ -78,24 +78,21 @@
 
 <script>
 let rawData = null;
-let activeFund = '野村優質(累積)'; // 預設選中「野村優質(累積)」
+let activeFund = '野村優質(累積)';
 
 let klineChart, compareChart, spreadChart;
-let topFundSeriesMap = {};   // 最上方三檔基金走勢線
-let lineSeriesMap = {};      // 中間績效百分比線
-let spreadSeriesMap = {};    // 下方超額報酬價差線
-let patternSeriesList = [];  // 白粗線與亮綠粗線標示序列
-
+let topFundSeriesMap = {};
+let lineSeriesMap = {};
+let spreadSeriesMap = {};
+let patternSeriesList = [];
 let currentMetricsMap = {};
 
-// 三檔基金專屬配色（最上方圖表用）
 const TOP_FUND_CONFIG = {
   '野村台灣運籌': { color: '#ff9800', priceScaleId: 'right', label: '野村台灣運籌 (右軸)' },
   '野村優質(累積)': { color: '#ffd54f', priceScaleId: 'right', label: '野村優質(累積) (右軸)' },
   '施羅德台灣樂活A': { color: '#ec407a', priceScaleId: 'left', label: '施羅德台灣樂活A (左軸)' }
 };
 
-// 中間與最下方圖表統一配色
 const BENCH_COLORS = {
   fund: '#ff9800',
   '加權指數': '#2962ff',
@@ -103,8 +100,8 @@ const BENCH_COLORS = {
   '00935': '#00bcd4'
 };
 
-// 1. 預設起訖日期為「近 1 年」
-const todayObj = new Date();
+// 預設起訖日期為「近 1 年」
+const nowDateObj = new Date();
 const formatDateLocal = (d) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -114,10 +111,25 @@ const formatDateLocal = (d) => {
 
 const endInput = document.getElementById('endDate');
 const startInput = document.getElementById('startDate');
-endInput.value = formatDateLocal(todayObj);
-startInput.value = formatDateLocal(new Date(todayObj.getFullYear() - 1, todayObj.getMonth(), todayObj.getDate()));
+if (endInput && startInput) {
+  endInput.value = formatDateLocal(nowDateObj);
+  startInput.value = formatDateLocal(new Date(nowDateObj.getFullYear() - 1, nowDateObj.getMonth(), nowDateObj.getDate()));
+}
 
-// 2. 建立「近 3 個月 / 近 1 年 / 近 3 年 / 全部」快捷按鈕列
+const fundSelectEl = document.getElementById('fundSelect');
+if (fundSelectEl) {
+  fundSelectEl.value = activeFund;
+  fundSelectEl.addEventListener('change', (e) => selectActiveFund(e.target.value));
+}
+
+function showError(msg) {
+  const banner = document.getElementById('statusBanner');
+  if (banner) {
+    banner.style.display = 'block';
+    banner.innerHTML = msg;
+  }
+}
+
 function buildDateRangeQuickButtons() {
   if (!endInput || document.getElementById('dateQuickBar')) return;
 
@@ -156,15 +168,12 @@ function buildDateRangeQuickButtons() {
       endInput.value = formatDateLocal(now);
 
       if (p.months === null) {
-        // 「全部」：自動尋找所有基金與基準中最早的一天（預設 2010-01-04）
         let minDate = '2010-01-04';
         if (rawData && rawData.funds) {
           const allFirstDates = Object.values(rawData.funds)
             .map(dObj => Object.keys(dObj).sort().at(0))
             .filter(Boolean);
-          if (allFirstDates.length > 0) {
-            minDate = allFirstDates.sort().at(0);
-          }
+          if (allFirstDates.length > 0) minDate = allFirstDates.sort().at(0);
         }
         startInput.value = minDate;
       } else {
@@ -173,45 +182,24 @@ function buildDateRangeQuickButtons() {
       }
 
       updateBtnStyle(p.id);
-      if (typeof renderAll === 'function') renderAll();
+      renderAll();
     };
     bar.appendChild(btn);
   });
 
-  // 插入到 endDate 輸入框後方
   endInput.parentNode.insertBefore(bar, endInput.nextSibling);
-  updateBtnStyle('1Y'); // 預設高亮「近 1 年」
+  updateBtnStyle('1Y');
 
-  // 若使用者手動修改日期選單，自動取消快捷按鈕高亮
   [startInput, endInput].forEach(inp => {
     inp.addEventListener('change', () => updateBtnStyle(''));
   });
 }
 
-buildDateRangeQuickButtons();
-  
-// 同步設定頁面下拉選單預設為「野村優質(累積)」
-const fundSelectEl = document.getElementById('fundSelect');
-if (fundSelectEl) {
-  fundSelectEl.value = activeFund;
-  fundSelectEl.addEventListener('change', (e) => {
-    selectActiveFund(e.target.value);
-  });
-}
-
-function showError(msg) {
-  const banner = document.getElementById('statusBanner');
-  banner.style.display = 'block';
-  banner.innerHTML = msg;
-}
-
-// 切換目前焦點基金並即時更新下方兩張圖與按鈕狀態
 function selectActiveFund(fundName) {
   if (!TOP_FUND_CONFIG[fundName]) return;
   activeFund = fundName;
   if (fundSelectEl) fundSelectEl.value = fundName;
 
-  // 更新最上方三顆按鈕的選中樣式
   document.querySelectorAll('.top-fund-pill').forEach(btn => {
     const isSelected = btn.dataset.fund === fundName;
     const cfg = TOP_FUND_CONFIG[btn.dataset.fund];
@@ -221,7 +209,6 @@ function selectActiveFund(fundName) {
     btn.style.boxShadow = isSelected ? `0 0 10px ${cfg.color}66` : 'none';
   });
 
-  // 突顯選中基金在最上方圖表的線條粗細
   for (const [fName, series] of Object.entries(topFundSeriesMap)) {
     series.applyOptions({ lineWidth: fName === activeFund ? 3 : 1.5 });
   }
@@ -229,7 +216,6 @@ function selectActiveFund(fundName) {
   renderAll();
 }
 
-// 在最上方圖表標題列建立可點擊的三檔基金切換按鈕列
 function buildTopFundSelectorBar() {
   const titleEl = document.getElementById('klineTitle');
   if (!titleEl || document.getElementById('topFundBar')) return;
@@ -254,8 +240,18 @@ function buildTopFundSelectorBar() {
   titleEl.parentNode.insertBefore(bar, titleEl.nextSibling);
 }
 
+
+
+
 function initCharts() {
+  buildDateRangeQuickButtons();
   buildTopFundSelectorBar();
+
+  document.querySelectorAll('span').forEach(el => {
+    if (el.innerText.includes('基金漲跌幅 - 大盤漲跌幅')) el.style.color = '#2962ff';
+    if (el.innerText.includes('基金漲跌幅 - 台積電漲跌幅')) el.style.color = '#e91e63';
+    if (el.innerText.includes('基金漲跌幅 - 00935漲跌幅')) el.style.color = '#00bcd4';
+  });
 
   const commonOptions = {
     layout: { background: { color: '#1e222d' }, textColor: '#d1d4dc' },
@@ -264,7 +260,6 @@ function initCharts() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
 
-  // 1. 最上方圖表：三檔基金淨值同框顯示（啟用左右雙座標軸）
   klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), {
     ...commonOptions,
     rightPriceScale: { visible: true, borderColor: '#485c7b' },
@@ -280,7 +275,6 @@ function initCharts() {
     });
   }
 
-  // 支援直接在最上方圖表點擊任意一條基金線，自動切換下方兩圖
   klineChart.subscribeClick(param => {
     if (!param.point || !param.seriesData) return;
     let closestFund = null;
@@ -304,7 +298,6 @@ function initCharts() {
     }
   });
 
-  // 2. 中間圖表：績效百分比比較圖
   compareChart = LightweightCharts.createChart(document.getElementById('compare-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(2) + '%' }
@@ -313,15 +306,14 @@ function initCharts() {
     lineSeriesMap[key] = compareChart.addLineSeries({ color, lineWidth: key === 'fund' ? 3 : 2 });
   }
 
-  // 3. 最下方圖表：超額報酬價差圖（顏色與中間圖表完全一致）
   spreadChart = LightweightCharts.createChart(document.getElementById('spread-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) + '%' }
   });
   const spreadColors = {
-    'diff_twii': BENCH_COLORS['加權指數'],       // #2962ff
-    'diff_2330': BENCH_COLORS['台積電(2330)'],   // #e91e63
-    'diff_00935': BENCH_COLORS['00935']          // #00bcd4
+    'diff_twii': BENCH_COLORS['加權指數'],
+    'diff_2330': BENCH_COLORS['台積電(2330)'],
+    'diff_00935': BENCH_COLORS['00935']
   };
   for (const [key, color] of Object.entries(spreadColors)) {
     spreadSeriesMap[key] = spreadChart.addLineSeries({ color, lineWidth: 2 });
@@ -335,7 +327,6 @@ function initCharts() {
     title: '0% 基準'
   });
 
-  // 三張圖表「放大縮小、左右拖曳」100% 同步
   const charts = [klineChart, compareChart, spreadChart];
   let isSyncingRange = false;
 
@@ -352,7 +343,6 @@ function initCharts() {
     });
   });
 
-  // 滑鼠移動點上顯示三檔基金淨值與選中基金五項漲跌幅
   const tooltip = document.createElement('div');
   tooltip.style.cssText = `
     position: fixed; display: none; pointer-events: none; z-index: 9999;
@@ -408,7 +398,7 @@ function initCharts() {
           📅 ${dateStr}
         </div>
         <div style="margin-bottom:6px;">
-          <div style="color:#9598a1; font-size:11.5px;">【三檔基金淨值（點擊可切換下方兩圖）】</div>
+          <div style="color:#9598a1; font-size:11.5px;">【三檔基金淨值】</div>
           ${navRowsHtml}
         </div>
         <div style="border-top:1px solid #363a45; padding-top:5px;">
@@ -441,9 +431,10 @@ function initCharts() {
 }
 
 
+
+
+
   
-
-
 function detectAndDrawPatterns(entries, targetPriceScaleId) {
   for (const s of patternSeriesList) {
     try { klineChart.removeSeries(s); } catch (e) {}
@@ -456,7 +447,6 @@ function detectAndDrawPatterns(entries, targetPriceScaleId) {
   const greenSegments = [];
   const tagMap = {};
 
-  // 1. 白粗線：連漲波段（容許中斷 <= 4 次）後單日急跌 <= -5%
   for (let i = 1; i < entries.length; i++) {
     const prevNav = entries.at(i - 1).at(1);
     const currNav = entries.at(i).at(1);
@@ -491,7 +481,6 @@ function detectAndDrawPatterns(entries, targetPriceScaleId) {
     }
   }
 
-  // 2. 亮綠粗線：連續下跌波段（容許中斷 <= 4 次），累計跌幅 <= -5%
   let idx = 0;
   while (idx < entries.length - 1) {
     if (entries.at(idx + 1).at(1) < entries.at(idx).at(1)) {
@@ -583,21 +572,6 @@ function toAlignedPctSeries(targetDict, alignedDates) {
   });
 }
 
-function toAlignedSpreadSeries(fundDict, benchDict, alignedDates) {
-  const validDates = alignedDates.filter(d => fundDict[d] !== undefined && benchDict[d] !== undefined);
-  if (validDates.length === 0) return [];
-  const fundBase = fundDict[validDates.at(0)];
-  const benchBase = benchDict[validDates.at(0)];
-  return alignedDates.map(d => {
-    if (fundDict[d] !== undefined && benchDict[d] !== undefined) {
-      const fundPct = ((fundDict[d] - fundBase) / fundBase) * 100;
-      const benchPct = ((benchDict[d] - benchBase) / benchBase) * 100;
-      return { time: d, value: fundPct - benchPct };
-    }
-    return { time: d };
-  });
-}
-
 function renderAll() {
   if (!rawData) return;
   const start = document.getElementById('startDate').value;
@@ -605,7 +579,6 @@ function renderAll() {
 
   document.getElementById('klineTitle').innerText = `三檔基金淨值總覽（目前焦點：${activeFund}）`;
 
-  // 收集三檔基金在區間內的所有聯集日期，作為三張圖的統一對齊時間軸
   const unionDateSet = new Set();
   for (const fName of Object.keys(TOP_FUND_CONFIG)) {
     const dObj = rawData.funds[fName] || {};
@@ -615,13 +588,11 @@ function renderAll() {
   }
   const alignedDates = Array.from(unionDateSet).sort((a, b) => a.localeCompare(b));
 
-  // 1. 繪製最上方三檔基金走勢線
   for (const fName of Object.keys(TOP_FUND_CONFIG)) {
     const fDict = rawData.funds[fName] || {};
     topFundSeriesMap[fName].setData(toAlignedNavSeries(fDict, alignedDates));
   }
 
-  // 2. 針對目前選中的 activeFund 計算型態粗線與五項漲跌幅
   const activeDict = rawData.funds[activeFund] || {};
   const allSortedActive = Object.entries(activeDict).sort((a, b) => a.at(0).localeCompare(b.at(0)));
   const fullIndexMap = Object.fromEntries(allSortedActive.map(([d], idx) => [d, idx]));
@@ -660,7 +631,6 @@ function renderAll() {
     };
   });
 
-  // 3. 更新中間圖表（績效比較）
   lineSeriesMap['fund'].setData(fundPctList);
   const benchPctMaps = {};
   for (const bName of ['加權指數', '台積電(2330)', '00935']) {
@@ -671,7 +641,6 @@ function renderAll() {
     );
   }
 
-  // 4. 更新最下方圖表：嚴格等於「中間圖表基金報酬% － 中間圖表基準報酬%」
   const buildExactSpread = (bName) => {
     return alignedDates.map(d => {
       const fVal = currentMetricsMap[d]?.cumPct;
@@ -682,15 +651,15 @@ function renderAll() {
     });
   };
 
-  const spTwiiList = buildExactSpread('加權指數');
-  const sp2330List = buildExactSpread('台積電(2330)');
-  const sp00935List = buildExactSpread('00935');
+  const exactTwiiSpread = buildExactSpread('加權指數');
+  const exact2330Spread = buildExactSpread('台積電(2330)');
+  const exact00935Spread = buildExactSpread('00935');
 
-  spreadSeriesMap['diff_twii'].setData(spTwiiList);
-  spreadSeriesMap['diff_2330'].setData(sp2330List);
-  spreadSeriesMap['diff_00935'].setData(sp00935List);
+  spreadSeriesMap['diff_twii'].setData(exactTwiiSpread);
+  spreadSeriesMap['diff_2330'].setData(exact2330Spread);
+  spreadSeriesMap['diff_00935'].setData(exact00935Spread);
 
-  spTwiiList.forEach(p => {
+  exactTwiiSpread.forEach(p => {
     if (currentMetricsMap[p.time]) currentMetricsMap[p.time].spreadTwii = p.value;
   });
 
@@ -698,8 +667,6 @@ function renderAll() {
   compareChart.timeScale().fitContent();
   spreadChart.timeScale().fitContent();
 }
-
-
 
 async function boot() {
   initCharts();
@@ -719,6 +686,7 @@ async function boot() {
 
 boot();
 </script>
+  
   
 </body>
 </html>
