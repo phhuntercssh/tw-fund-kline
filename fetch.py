@@ -141,13 +141,15 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code
 
 
 def fetch_twse_stock_month(session, stock_no, year, month):
-    """向臺灣證券交易所 (TWSE) 官方 API 補齊指定年月個股/ETF收盤價"""
+    """向證交所 (TWSE) 與 FinMind 台灣股市 API 補齊指定年月個股/ETF收盤價"""
+    parsed = {}
+
+    # 1. 嘗試臺灣證券交易所 (TWSE) 官方 API
     url = build_url(
         "https://twse.com.tw",
         ["exchangeReport", "STOCK_DAY"],
         f"response=json&date={year}{month:02d}01&stockNo={stock_no}"
     )
-    parsed = {}
     try:
         resp = session.get(url, headers=HEADERS, timeout=15)
         if resp.status_code == 200:
@@ -176,7 +178,50 @@ def fetch_twse_stock_month(session, stock_no, year, month):
                         parsed[d_iso] = round(val, 2)
     except Exception:
         pass
+
+    # 2. 若 TWSE 對海外機房限流未回傳，自動改用 FinMind 台灣股市公開 API 補齊
+    if not parsed:
+        fm_url = build_url(
+            "https://finmindtrade.com",
+            ["api", "v4", "data"],
+            f"dataset=TaiwanStockPrice&data_id={stock_no}&start_date={year}-{month:02d}-01"
+        )
+        try:
+            r_fm = session.get(fm_url, headers=HEADERS, timeout=15)
+            if r_fm.status_code == 200:
+                fm_json = r_fm.json()
+                for row in fm_json.get("data", []):
+                    d_iso = str(row.get("date", ""))[:10]
+                    val = float(row.get("close", 0))
+                    if len(d_iso) == 10 and val > 0 and d_iso >= START_DATE:
+                        parsed[d_iso] = round(val, 2)
+        except Exception:
+            pass
+
     return parsed
+
+
+    # 2. 若 TWSE 對海外機房限流未回傳，自動改用 FinMind 台灣股市公開 API 補齊
+    if not parsed:
+        fm_url = build_url(
+            "https://finmindtrade.com",
+            ["api", "v4", "data"],
+            f"dataset=TaiwanStockPrice&data_id={stock_no}&start_date={year}-{month:02d}-01"
+        )
+        try:
+            r_fm = session.get(fm_url, headers=HEADERS, timeout=15)
+            if r_fm.status_code == 200:
+                fm_json = r_fm.json()
+                for row in fm_json.get("data", []):
+                    d_iso = str(row.get("date", ""))[:10]
+                    val = float(row.get("close", 0))
+                    if len(d_iso) == 10 and val > 0 and d_iso >= START_DATE:
+                        parsed[d_iso] = round(val, 2)
+        except Exception:
+            pass
+
+    return parsed
+
 
 
 def find_missing_gaps(corp_funds_map):
