@@ -103,11 +103,6 @@ const BENCH_COLORS = {
   '00935': '#00bcd4'
 };
 
-const todayObj = new Date();
-const oneYearAgoObj = new Date(todayObj.getFullYear() - 1, todayObj.getMonth(), todayObj.getDate());
-document.getElementById('startDate').value = oneYearAgoObj.toISOString().split('T').at(0);
-document.getElementById('endDate').value = todayObj.toISOString().split('T').at(0);
-
 // 1. 預設起訖日期為「近 1 年」
 const todayObj = new Date();
 const formatDateLocal = (d) => {
