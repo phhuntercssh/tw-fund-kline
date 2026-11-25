@@ -23,7 +23,7 @@ FUNDS = {
         "code": "T4209Y",
         "sitca_corp": "A0042",
         "min_nav": 10.0,
-        "max_nav": 120.0
+        "max_nav": 900.0
     }
 }
 
@@ -292,10 +292,16 @@ def main():
     merged_all = {}
     for name, cfg in FUNDS.items():
         records = dict(existing_funds.get(name, {}))
+        if name == "施羅德台灣樂活A":
+            records = {
+                d: v for d, v in records.items()
+                if not (d >= "2026-04-01" and v < 45.0)
+            }
         merged_all[name] = {
             d: v for d, v in records.items()
             if cfg["min_nav"] <= v <= cfg["max_nav"]
         }
+
 
     # 2. 依投信分組執行 SITCA 官方修補空洞＋歷史回補
     corps = {}
