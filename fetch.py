@@ -255,9 +255,9 @@ def main():
     for name in FUNDS:
         records = dict(existing_funds.get(name, {}))
         if name == "野村台灣運籌":
-            records = {d: v for d, v in records.items() if 10 < v < 350}
+            records = {d: v for d, v in records.items() if 10 < v < 800}
         elif name == "野村優質(累積)":
-            records = {d: v for d, v in records.items() if 80 < v < 350}
+            records = {d: v for d, v in records.items() if 80 < v < 800}
         elif name == "施羅德台灣樂活A":
             records = {d: v for d, v in records.items() if 20 < v < 120}
         merged_all[name] = records
