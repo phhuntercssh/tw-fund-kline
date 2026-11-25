@@ -103,8 +103,98 @@ const BENCH_COLORS = {
   '00935': '#00bcd4'
 };
 
-document.getElementById('endDate').value = new Date().toISOString().split('T').at(0);
+const todayObj = new Date();
+const oneYearAgoObj = new Date(todayObj.getFullYear() - 1, todayObj.getMonth(), todayObj.getDate());
+document.getElementById('startDate').value = oneYearAgoObj.toISOString().split('T').at(0);
+document.getElementById('endDate').value = todayObj.toISOString().split('T').at(0);
 
+// 1. 預設起訖日期為「近 1 年」
+const todayObj = new Date();
+const formatDateLocal = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const endInput = document.getElementById('endDate');
+const startInput = document.getElementById('startDate');
+endInput.value = formatDateLocal(todayObj);
+startInput.value = formatDateLocal(new Date(todayObj.getFullYear() - 1, todayObj.getMonth(), todayObj.getDate()));
+
+// 2. 建立「近 3 個月 / 近 1 年 / 近 3 年 / 全部」快捷按鈕列
+function buildDateRangeQuickButtons() {
+  if (!endInput || document.getElementById('dateQuickBar')) return;
+
+  const bar = document.createElement('div');
+  bar.id = 'dateQuickBar';
+  bar.style.cssText = 'display:inline-flex; gap:6px; margin-left:10px; vertical-align:middle;';
+
+  const presets = [
+    { id: '3M', label: '近 3 個月', months: 3 },
+    { id: '1Y', label: '近 1 年', months: 12 },
+    { id: '3Y', label: '近 3 年', months: 36 },
+    { id: 'ALL', label: '全部', months: null }
+  ];
+
+  const updateBtnStyle = (activeId) => {
+    bar.querySelectorAll('button').forEach(b => {
+      const isSelected = b.dataset.preset === activeId;
+      b.style.background = isSelected ? '#2962ff' : '#2a2e39';
+      b.style.color = isSelected ? '#ffffff' : '#d1d4dc';
+      b.style.borderColor = isSelected ? '#2962ff' : '#485c7b';
+      b.style.fontWeight = isSelected ? 'bold' : 'normal';
+    });
+  };
+
+  presets.forEach(p => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.dataset.preset = p.id;
+    btn.innerText = p.label;
+    btn.style.cssText = `
+      border: 1px solid #485c7b; border-radius: 4px; padding: 4px 10px;
+      font-size: 12.5px; cursor: pointer; transition: all 0.15s ease;
+    `;
+    btn.onclick = () => {
+      const now = new Date();
+      endInput.value = formatDateLocal(now);
+
+      if (p.months === null) {
+        // 「全部」：自動尋找所有基金與基準中最早的一天（預設 2010-01-04）
+        let minDate = '2010-01-04';
+        if (rawData && rawData.funds) {
+          const allFirstDates = Object.values(rawData.funds)
+            .map(dObj => Object.keys(dObj).sort().at(0))
+            .filter(Boolean);
+          if (allFirstDates.length > 0) {
+            minDate = allFirstDates.sort().at(0);
+          }
+        }
+        startInput.value = minDate;
+      } else {
+        const target = new Date(now.getFullYear(), now.getMonth() - p.months, now.getDate());
+        startInput.value = formatDateLocal(target);
+      }
+
+      updateBtnStyle(p.id);
+      if (typeof renderAll === 'function') renderAll();
+    };
+    bar.appendChild(btn);
+  });
+
+  // 插入到 endDate 輸入框後方
+  endInput.parentNode.insertBefore(bar, endInput.nextSibling);
+  updateBtnStyle('1Y'); // 預設高亮「近 1 年」
+
+  // 若使用者手動修改日期選單，自動取消快捷按鈕高亮
+  [startInput, endInput].forEach(inp => {
+    inp.addEventListener('change', () => updateBtnStyle(''));
+  });
+}
+
+buildDateRangeQuickButtons();
+  
 // 同步設定頁面下拉選單預設為「野村優質(累積)」
 const fundSelectEl = document.getElementById('fundSelect');
 if (fundSelectEl) {
