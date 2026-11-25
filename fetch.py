@@ -131,9 +131,10 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, targ
             if attempt == 0:
                 time.sleep(1.5)
             else:
-                print(f"    [SITCA單日異常 {corp_id} {d_iso}] {e}")
+                print(f"    [SITCA單日異常 {corp_id} {d_iso}] {e}", flush=True)
 
     return found_navs, hidden_fields
+
 
 
 
