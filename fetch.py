@@ -159,43 +159,52 @@ def find_missing_gaps(corp_funds_map):
             d2 = datetime.date.fromisoformat(dates[i])
             if (d2 - d1).days > 6:
                 gaps.append((d1 + datetime.timedelta(days=1), d2 - datetime.timedelta(days=1)))
-    gaps.sort(key=lambda x: x, reverse=True)
+    gaps.sort(key=lambda x: x[1], reverse=True)
     return gaps
 
 
 def backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18):
-    """優先修補中間斷層空洞與最新淨值，再往前推進"""
+    """優先修補中間斷層空洞與最新淨值，空洞修補完後自動接續往 2010 年推進"""
     try:
         url, hidden_fields = init_sitca_session(session)
     except Exception as e:
         print(f"    [SITCA初始化失敗] {e}", flush=True)
         return
 
-    isin_to_name = {FUNDS[f_name]["isin"]: f_name for f_name in corp_funds_map}
-    target_isins = list(isin_to_name.keys())
+    code_to_name = {FUNDS[f_name]["code"]: f_name for f_name in corp_funds_map}
     queried_count, hit_days = 0, 0
 
+    # 步驟 A：優先修補中間斷層空洞與最新淨值
     gaps = find_missing_gaps(corp_funds_map)
     for gap_start, gap_end in gaps:
         if queried_count >= max_trading_days:
             break
+        print(f"    [修補空洞] {corp_id} 補齊 {gap_start} ~ {gap_end}...", flush=True)
         cursor = gap_end
         while cursor >= gap_start and queried_count < max_trading_days:
             if cursor.weekday() >= 5:
                 cursor -= datetime.timedelta(days=1)
                 continue
-            found_navs, hidden_fields = query_sitca_single_day(session, url, hidden_fields, corp_id, cursor, target_isins)
+            found_navs, hidden_fields = query_sitca_single_day(
+                session, url, hidden_fields, corp_id, cursor, code_to_name
+            )
             queried_count += 1
             if found_navs:
                 hit_days += 1
-                for isin, (d_iso, val) in found_navs.items():
-                    corp_funds_map[isin_to_name[isin]][d_iso] = val
+                for f_name, (d_iso, val) in found_navs.items():
+                    corp_funds_map[f_name][d_iso] = val
+                if hit_days % 10 == 1:
+                    sample_str = ", ".join(f"{k}={v[1]}" for k, v in found_navs.items())
+                    print(f"      -> [{cursor}] 命中 ({sample_str})", flush=True)
             cursor -= datetime.timedelta(days=1)
             time.sleep(0.25)
 
-    # 繼續往早期歷史推進
+    # 步驟 B：若額度還有剩，從最早日期繼續往 2010-01-04 推進
     target_start = datetime.date.fromisoformat(START_DATE)
-    earliest_dates = [min(records.keys()) if records else datetime.date.today().strftime("%Y-%m-%d") for records in corp_funds_map.values()]
+    earliest_dates = [
+        min(records.keys()) if records else datetime.date.today().strftime("%Y-%m-%d")
+        for records in corp_funds_map.values()
+    ]
     cursor_dt = datetime.date.fromisoformat(max(earliest_dates)) - datetime.timedelta(days=1)
     empty_streak = 0
 
@@ -203,19 +212,27 @@ def backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18):
         if cursor_dt.weekday() >= 5:
             cursor_dt -= datetime.timedelta(days=1)
             continue
-        found_navs, hidden_fields = query_sitca_single_day(session, url, hidden_fields, corp_id, cursor_dt, target_isins)
+        found_navs, hidden_fields = query_sitca_single_day(
+            session, url, hidden_fields, corp_id, cursor_dt, code_to_name
+        )
         queried_count += 1
         if found_navs:
             hit_days += 1
             empty_streak = 0
-            for isin, (d_iso, val) in found_navs.items():
-                corp_funds_map[isin_to_name[isin]][d_iso] = val
+            for f_name, (d_iso, val) in found_navs.items():
+                corp_funds_map[f_name][d_iso] = val
+            if hit_days % 10 == 1:
+                sample_str = ", ".join(f"{k}={v[1]}" for k, v in found_navs.items())
+                print(f"      -> [{cursor_dt}] 命中 ({sample_str})", flush=True)
         else:
             empty_streak += 1
             if empty_streak >= 25:
+                print(f"    -> 連續 25 個平日無淨值，停止回補。", flush=True)
                 break
         cursor_dt -= datetime.timedelta(days=1)
         time.sleep(0.25)
+
+    print(f"    -> {corp_id} 本輪查詢 {queried_count} 個平日，成功補齊 {hit_days} 個交易日", flush=True)
 
 
 def fetch_benchmark_history(ticker):
@@ -252,28 +269,38 @@ def main():
     existing_benchmarks = existing.get("benchmarks", {})
     session = requests.Session()
 
+    # 1. 載入現有資料並清除所有超出合理淨值範圍的舊錯誤數據
     merged_all = {}
-    for name in FUNDS:
+    for name, cfg in FUNDS.items():
         records = dict(existing_funds.get(name, {}))
-        if name == "野村台灣運籌":
-            records = {d: v for d, v in records.items() if 10 < v < 800}
-        elif name == "野村優質(累積)":
-            records = {d: v for d, v in records.items() if 80 < v < 800}
-        elif name == "施羅德台灣樂活A":
-            records = {d: v for d, v in records.items() if 20 < v < 120}
-        merged_all[name] = records
+        merged_all[name] = {
+            d: v for d, v in records.items()
+            if cfg["min_nav"] <= v <= cfg["max_nav"]
+        }
 
+    # 2. 依投信分組執行 SITCA 官方修補空洞＋歷史回補
     corps = {}
     for name, info in FUNDS.items():
         corp_id = info["sitca_corp"]
         corps.setdefault(corp_id, {})[name] = merged_all[name]
 
     for corp_id, corp_funds_map in corps.items():
+        print(f"Processing SITCA corp {corp_id}...", flush=True)
         backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18)
         save_progress(merged_all, existing_benchmarks)
+        print(f"  -> 已即時保存 {corp_id} 進度至 data.json", flush=True)
 
+    for name in FUNDS:
+        dates = sorted(merged_all[name].keys())
+        if dates:
+            first_d = next(iter(dates))
+            last_d = dates[-1]
+            print(f"  -> {name} 目前總筆數: {len(dates)} 筆 ({first_d} ~ {last_d})", flush=True)
+
+    # 3. 更新大盤與 ETF 基準指標
     benchmarks_out = dict(existing_benchmarks)
     for name, ticker in BENCHMARKS.items():
+        print(f"Fetching benchmark: {name} ({ticker})...", flush=True)
         fetched = fetch_benchmark_history(ticker)
         if fetched:
             benchmarks_out[name] = fetched
@@ -284,3 +311,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
