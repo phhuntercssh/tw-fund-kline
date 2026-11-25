@@ -81,8 +81,7 @@ def init_sitca_session(session):
 
 def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code_to_name):
     """
-    嚴格鎖定 SITCA 表格固定欄位位置：
-    cells=投信代號, cells=基金6碼代號(如T3218Y), cells=幣別(TWD), cells=當日淨值
+    嚴格鎖定 SITCA 表格固定欄位位置（第2欄=投信代號, 第4欄=基金6碼代號, 第7欄=幣別TWD, 第8欄=當日淨值）
     """
     d_compact = target_dt.strftime("%Y%m%d")
     d_iso = target_dt.strftime("%Y-%m-%d")
@@ -111,11 +110,16 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code
                 if len(cells) < 8:
                     continue
 
-                # 嚴格檢查投信代號、基金代號與台幣計價
-                row_corp = cells
-                row_code = cells
-                row_curr = cells
-                row_nav_str = cells.replace(",", "")
+                # 用迭代器依序取出前 8 欄，完全不用中括號索引，徹底避免複製貼上遺失符號
+                it = iter(cells)
+                _col0 = next(it)
+                row_corp = next(it)
+                _col2 = next(it)
+                row_code = next(it)
+                _col4 = next(it)
+                _col5 = next(it)
+                row_curr = next(it)
+                row_nav_str = next(it).replace(",", "")
 
                 if row_corp == corp_id and row_code in code_to_name and row_curr == "TWD":
                     try:
@@ -134,6 +138,7 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code
                 print(f"    [SITCA異常 {corp_id} {d_iso}] {e}", flush=True)
 
     return found_navs, hidden_fields
+
 
 
 
