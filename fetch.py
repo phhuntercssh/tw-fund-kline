@@ -254,9 +254,11 @@ def backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18):
     print(f"    -> {corp_id} 本輪查詢 {queried_count} 個平日，成功補齊 {hit_days} 個交易日", flush=True)
 
 
-def fetch_benchmark_history(ticker):
-    result = {}
+def fetch_benchmark_history(ticker, existing_dict=None):
+    """抓取基準指數/ETF完整歷史，並額外用 period='5d' 補齊最新 1~2 個交易日收盤價"""
+    result = dict(existing_dict) if existing_dict else {}
     try:
+        # 1. 抓完整歷史區間
         df = yf.download(ticker, start=START_DATE, progress=False, auto_adjust=True)
         if df is not None and not df.empty:
             close_series = df["Close"]
@@ -267,9 +269,23 @@ def fetch_benchmark_history(ticker):
                     date_str = idx.strftime("%Y-%m-%d")
                     if date_str >= START_DATE:
                         result[date_str] = round(float(val), 2)
+
+        # 2. 額外抓近 5 個交易日（解決台股 ETF 如 00935 歷史表延遲 1 天才寫入的問題）
+        df_recent = yf.download(ticker, period="5d", progress=False, auto_adjust=True)
+        if df_recent is not None and not df_recent.empty:
+            recent_close = df_recent["Close"]
+            if hasattr(recent_close, "columns"):
+                recent_close = recent_close.iloc[:, 0]
+            for idx, val in recent_close.items():
+                if val == val and float(val) > 0:
+                    date_str = idx.strftime("%Y-%m-%d")
+                    if date_str >= START_DATE:
+                        result[date_str] = round(float(val), 2)
     except Exception as e:
         print(f"    [yfinance異常 {ticker}] {e}", flush=True)
-    return result
+
+    return dict(sorted(result.items()))
+
 
 
 def save_progress(merged_all, benchmarks_data):
@@ -326,9 +342,7 @@ def main():
     benchmarks_out = dict(existing_benchmarks)
     for name, ticker in BENCHMARKS.items():
         print(f"Fetching benchmark: {name} ({ticker})...", flush=True)
-        fetched = fetch_benchmark_history(ticker)
-        if fetched:
-            benchmarks_out[name] = fetched
+        benchmarks_out[name] = fetch_benchmark_history(ticker, existing_benchmarks.get(name, {}))
 
     save_progress(merged_all, benchmarks_out)
     print("Successfully updated data.json!", flush=True)
