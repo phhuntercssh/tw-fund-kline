@@ -79,10 +79,13 @@ def init_sitca_session(session):
     return url, parse_aspnet_hidden(r_get.text)
 
 
+_A0042_DIAG_PRINTED = False
+
 def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code_to_name):
     """
     嚴格鎖定 SITCA 表格固定欄位位置（第2欄=投信代號, 第4欄=基金6碼代號, 第7欄=幣別TWD, 第8欄=當日淨值）
     """
+    global _A0042_DIAG_PRINTED
     d_compact = target_dt.strftime("%Y%m%d")
     d_iso = target_dt.strftime("%Y-%m-%d")
 
@@ -92,6 +95,8 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code
     post_data["ctl00$ContentPlaceHolder1$BtnQuery"] = "查詢"
 
     found_navs = {}
+    a0042_samples = []
+
     for attempt in range(2):
         try:
             r_post = session.post(url, data=post_data, headers={**HEADERS, "Referer": url}, timeout=25)
@@ -110,16 +115,18 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code
                 if len(cells) < 8:
                     continue
 
-                # 用迭代器依序取出前 8 欄，完全不用中括號索引，徹底避免複製貼上遺失符號
                 it = iter(cells)
                 _col0 = next(it)
                 row_corp = next(it)
                 _col2 = next(it)
                 row_code = next(it)
                 _col4 = next(it)
-                _col5 = next(it)
+                row_fname = next(it)
                 row_curr = next(it)
                 row_nav_str = next(it).replace(",", "")
+
+                if row_corp == "A0042" and row_curr == "TWD":
+                    a0042_samples.append(f"{row_code} | {row_fname[:15]} | {row_nav_str}")
 
                 if row_corp == corp_id and row_code in code_to_name and row_curr == "TWD":
                     try:
@@ -137,7 +144,14 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code
             else:
                 print(f"    [SITCA異常 {corp_id} {d_iso}] {e}", flush=True)
 
+    if corp_id == "A0042" and not found_navs and a0042_samples and not _A0042_DIAG_PRINTED:
+        print(f"    [A0042 施羅德投信 {d_iso} 全部台幣基金清單]：", flush=True)
+        for item in a0042_samples:
+            print(f"      - {item}", flush=True)
+        _A0042_DIAG_PRINTED = True
+
     return found_navs, hidden_fields
+
 
 
 
