@@ -305,7 +305,7 @@ def main():
         earliest_in_corp = max(min(r.keys()) if r else "9999-12-31" for r in corp_funds_map.values())
         if earliest_in_corp > START_DATE:
             print(f"Backfilling SITCA corp {corp_id} (目前最早至 {earliest_in_corp})...", flush=True)
-            backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=35)
+            backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18)
             # 每跑完一家投信就立刻存檔一次！
             save_progress(merged_all, existing_benchmarks)
             print(f"  -> 已即時保存 {corp_id} 回補進度至 data.json", flush=True)
