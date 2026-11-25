@@ -79,13 +79,8 @@ def init_sitca_session(session):
     return url, parse_aspnet_hidden(r_get.text)
 
 
-_A0042_DIAG_PRINTED = False
-
 def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code_to_name):
-    """
-    嚴格鎖定 SITCA 表格固定欄位位置（第2欄=投信代號, 第4欄=基金6碼代號, 第7欄=幣別TWD, 第8欄=當日淨值）
-    """
-    global _A0042_DIAG_PRINTED
+    """嚴格鎖定 SITCA 表格固定欄位位置，完全使用迭代器避免複製貼上遺失索引"""
     d_compact = target_dt.strftime("%Y%m%d")
     d_iso = target_dt.strftime("%Y-%m-%d")
 
@@ -95,8 +90,6 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code
     post_data["ctl00$ContentPlaceHolder1$BtnQuery"] = "查詢"
 
     found_navs = {}
-    a0042_samples = []
-
     for attempt in range(2):
         try:
             r_post = session.post(url, data=post_data, headers={**HEADERS, "Referer": url}, timeout=25)
@@ -121,12 +114,9 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code
                 _col2 = next(it)
                 row_code = next(it)
                 _col4 = next(it)
-                row_fname = next(it)
+                _col5 = next(it)
                 row_curr = next(it)
                 row_nav_str = next(it).replace(",", "")
-
-                if row_corp == "A0042" and row_curr == "TWD":
-                    a0042_samples.append(f"{row_code} | {row_fname[:15]} | {row_nav_str}")
 
                 if row_corp == corp_id and row_code in code_to_name and row_curr == "TWD":
                     try:
@@ -144,41 +134,69 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, code
             else:
                 print(f"    [SITCA異常 {corp_id} {d_iso}] {e}", flush=True)
 
-    if corp_id == "A0042" and not found_navs and a0042_samples and not _A0042_DIAG_PRINTED:
-        print(f"    [A0042 施羅德投信 {d_iso} 全部台幣基金清單]：", flush=True)
-        for item in a0042_samples:
-            print(f"      - {item}", flush=True)
-        _A0042_DIAG_PRINTED = True
-
     return found_navs, hidden_fields
 
 
 
 
 
+def fetch_twse_stock_month(session, stock_no, year, month):
+    """向臺灣證券交易所 (TWSE) 官方 API 補齊指定年月個股/ETF收盤價"""
+    url = build_url(
+        "https://twse.com.tw",
+        ["exchangeReport", "STOCK_DAY"],
+        f"response=json&date={year}{month:02d}01&stockNo={stock_no}"
+    )
+    parsed = {}
+    try:
+        resp = session.get(url, headers=HEADERS, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            for row in data.get("data", []):
+                if not isinstance(row, list) or len(row) < 7:
+                    continue
+                it = iter(row)
+                roc_date_str = str(next(it)).strip()
+                _vol = next(it)
+                _val = next(it)
+                _open = next(it)
+                _high = next(it)
+                _low = next(it)
+                close_str = str(next(it)).replace(",", "").strip()
 
-
-
+                parts = roc_date_str.split("/")
+                if len(parts) == 3 and close_str and close_str != "--":
+                    p_it = iter(parts)
+                    y_ad = int(next(p_it)) + 1911
+                    m_ad = int(next(p_it))
+                    d_ad = int(next(p_it))
+                    d_iso = f"{y_ad:04d}-{m_ad:02d}-{d_ad:02d}"
+                    val = float(close_str)
+                    if val > 0 and d_iso >= START_DATE:
+                        parsed[d_iso] = round(val, 2)
+    except Exception:
+        pass
+    return parsed
 
 
 def find_missing_gaps(corp_funds_map):
     """掃描現有資料中所有斷層空洞與最新交易日缺口，優先排入補齊"""
-    today_tw = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)).date() - datetime.timedelta(days=1)
+    yesterday_tw = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)).date() - datetime.timedelta(days=1)
     gaps = []
     for f_name, records in corp_funds_map.items():
         if not records:
-            gaps.append((datetime.date.fromisoformat(START_DATE), today_tw))
+            gaps.append((datetime.date.fromisoformat(START_DATE), yesterday_tw))
             continue
         dates = sorted(records.keys())
         latest_dt = datetime.date.fromisoformat(dates[-1])
-        if (today_tw - latest_dt).days >= 1:
-            gaps.append((latest_dt + datetime.timedelta(days=1), today_tw))
+        if (yesterday_tw - latest_dt).days >= 1:
+            gaps.append((latest_dt + datetime.timedelta(days=1), yesterday_tw))
         for i in range(1, len(dates)):
             d1 = datetime.date.fromisoformat(dates[i - 1])
             d2 = datetime.date.fromisoformat(dates[i])
             if (d2 - d1).days > 6:
                 gaps.append((d1 + datetime.timedelta(days=1), d2 - datetime.timedelta(days=1)))
-    gaps.sort(key=lambda x: x[1], reverse=True)
+    gaps.sort(reverse=True)
     return gaps
 
 
@@ -193,7 +211,6 @@ def backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18):
     code_to_name = {FUNDS[f_name]["code"]: f_name for f_name in corp_funds_map}
     queried_count, hit_days = 0, 0
 
-    # 步驟 A：優先修補中間斷層空洞與最新淨值
     gaps = find_missing_gaps(corp_funds_map)
     for gap_start, gap_end in gaps:
         if queried_count >= max_trading_days:
@@ -213,12 +230,11 @@ def backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18):
                 for f_name, (d_iso, val) in found_navs.items():
                     corp_funds_map[f_name][d_iso] = val
                 if hit_days % 10 == 1:
-                    sample_str = ", ".join(f"{k}={v[1]}" for k, v in found_navs.items())
+                    sample_str = ", ".join(f"{k}={v}" for k, v in found_navs.items())
                     print(f"      -> [{cursor}] 命中 ({sample_str})", flush=True)
             cursor -= datetime.timedelta(days=1)
             time.sleep(0.25)
 
-    # 步驟 B：若額度還有剩，從最早日期繼續往 2010-01-04 推進
     target_start = datetime.date.fromisoformat(START_DATE)
     earliest_dates = [
         min(records.keys()) if records else datetime.date.today().strftime("%Y-%m-%d")
@@ -241,7 +257,7 @@ def backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18):
             for f_name, (d_iso, val) in found_navs.items():
                 corp_funds_map[f_name][d_iso] = val
             if hit_days % 10 == 1:
-                sample_str = ", ".join(f"{k}={v[1]}" for k, v in found_navs.items())
+                sample_str = ", ".join(f"{k}={v}" for k, v in found_navs.items())
                 print(f"      -> [{cursor_dt}] 命中 ({sample_str})", flush=True)
         else:
             empty_streak += 1
@@ -254,8 +270,11 @@ def backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18):
     print(f"    -> {corp_id} 本輪查詢 {queried_count} 個平日，成功補齊 {hit_days} 個交易日", flush=True)
 
 
-def fetch_benchmark_history(ticker, existing_dict=None):
-    """抓取基準指數/ETF完整歷史，並額外用 period='5d' 補齊最新 1~2 個交易日收盤價"""
+
+
+
+def fetch_benchmark_history(session, ticker, existing_dict=None):
+    """抓取基準指數/ETF完整歷史，並額外透過 period='5d' 與 TWSE 官方 API 補齊最新交易日"""
     result = dict(existing_dict) if existing_dict else {}
     try:
         # 1. 抓完整歷史區間
@@ -270,7 +289,7 @@ def fetch_benchmark_history(ticker, existing_dict=None):
                     if date_str >= START_DATE:
                         result[date_str] = round(float(val), 2)
 
-        # 2. 額外抓近 5 個交易日（解決台股 ETF 如 00935 歷史表延遲 1 天才寫入的問題）
+        # 2. 額外抓近 5 日即時行情補齊延遲日
         df_recent = yf.download(ticker, period="5d", progress=False, auto_adjust=True)
         if df_recent is not None and not df_recent.empty:
             recent_close = df_recent["Close"]
@@ -281,11 +300,22 @@ def fetch_benchmark_history(ticker, existing_dict=None):
                     date_str = idx.strftime("%Y-%m-%d")
                     if date_str >= START_DATE:
                         result[date_str] = round(float(val), 2)
+
+        # 3. 針對台股個股與 ETF (.TW) 額外向臺灣證券交易所 (TWSE) 官方補齊當月與上月收盤價
+        if ticker.endswith(".TW"):
+            stock_no = ticker.replace(".TW", "")
+            now_tw = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)).date()
+            prev_month_dt = now_tw.replace(day=1) - datetime.timedelta(days=1)
+            for dt_obj in (prev_month_dt, now_tw):
+                twse_data = fetch_twse_stock_month(session, stock_no, dt_obj.year, dt_obj.month)
+                if twse_data:
+                    result.update(twse_data)
+                time.sleep(0.3)
+
     except Exception as e:
-        print(f"    [yfinance異常 {ticker}] {e}", flush=True)
+        print(f"    [基準指標異常 {ticker}] {e}", flush=True)
 
     return dict(sorted(result.items()))
-
 
 
 def save_progress(merged_all, benchmarks_data):
@@ -304,7 +334,7 @@ def main():
     existing_benchmarks = existing.get("benchmarks", {})
     session = requests.Session()
 
-    # 1. 載入現有資料並清除所有超出合理淨值範圍的舊錯誤數據
+    # 1. 載入現有資料並清除所有異常淨值區間
     merged_all = {}
     for name, cfg in FUNDS.items():
         records = dict(existing_funds.get(name, {}))
@@ -317,7 +347,6 @@ def main():
             d: v for d, v in records.items()
             if cfg["min_nav"] <= v <= cfg["max_nav"]
         }
-
 
     # 2. 依投信分組執行 SITCA 官方修補空洞＋歷史回補
     corps = {}
@@ -338,11 +367,11 @@ def main():
             last_d = dates[-1]
             print(f"  -> {name} 目前總筆數: {len(dates)} 筆 ({first_d} ~ {last_d})", flush=True)
 
-    # 3. 更新大盤與 ETF 基準指標
+    # 3. 更新大盤與 ETF 基準指標（含 TWSE 官方補齊）
     benchmarks_out = dict(existing_benchmarks)
     for name, ticker in BENCHMARKS.items():
         print(f"Fetching benchmark: {name} ({ticker})...", flush=True)
-        benchmarks_out[name] = fetch_benchmark_history(ticker, existing_benchmarks.get(name, {}))
+        benchmarks_out[name] = fetch_benchmark_history(session, ticker, existing_benchmarks.get(name, {}))
 
     save_progress(merged_all, benchmarks_out)
     print("Successfully updated data.json!", flush=True)
