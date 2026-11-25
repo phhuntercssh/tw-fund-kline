@@ -112,18 +112,16 @@ def init_sitca_session(session):
 _SITCA_ROW_DEBUG = False
 
 def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, target_isins):
-    """查詢 SITCA 指定投信在單一日期 (YYYYMMDD) 的淨值，同時支援 ISIN 與基金中文名稱比對"""
-    global _SITCA_ROW_DEBUG
+    """查詢 SITCA 指定投信在單一日期 (YYYYMMDD) 的淨值，精準比對投信基金代號（避免同名基金混淆）"""
     d_compact = target_dt.strftime("%Y%m%d")
     d_iso = target_dt.strftime("%Y-%m-%d")
 
-    # 建立對照關鍵字（ISIN 碼 + 基金核心簡稱）
-    keyword_to_isin = {}
+    # 從 ISIN (如 TW000T4209Y0) 萃取出 SITCA 表格第4欄的精準代號 (如 T4209Y)
+    code_to_isin = {}
     for isin in target_isins:
-        keyword_to_isin[isin] = isin
-    keyword_to_isin["台灣運籌"] = "TW000T3218Y2"
-    keyword_to_isin["野村優質"] = "TW000T3201Y8"
-    keyword_to_isin["台灣樂活"] = "TW000T4209Y0"
+        code_to_isin[isin] = isin
+        if isin.startswith("TW000") and len(isin) >= 11:
+            code_to_isin[isin[5:11]] = isin
 
     post_data = dict(hidden_fields)
     post_data["ctl00$ContentPlaceHolder1$txtQ_Date"] = d_compact
@@ -131,54 +129,53 @@ def query_sitca_single_day(session, url, hidden_fields, corp_id, target_dt, targ
     post_data["ctl00$ContentPlaceHolder1$BtnQuery"] = "查詢"
 
     found_navs = {}
-    try:
-        r_post = session.post(url, data=post_data, headers={**HEADERS, "Referer": url}, timeout=20)
-        if r_post.status_code != 200:
-            return found_navs, hidden_fields
-        r_post.encoding = "utf-8"
-
-        new_hidden = parse_aspnet_hidden(r_post.text)
-        if new_hidden:
-            hidden_fields = new_hidden
-
-        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", r_post.text, re.S | re.I)
-
-        if not _SITCA_ROW_DEBUG:
-            sample_rows = [
-                [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.S | re.I)]
-                for r in rows if ("野村" in r or "運籌" in r or "施羅德" in r or "ISIN" in r)
-            ]
-            print(f"    [SITCA回傳表格診斷 {d_iso}] 總列數={len(rows)}, 相關列前3筆={sample_rows[:3]}")
-            _SITCA_ROW_DEBUG = True
-
-        for row_html in rows:
-            matched_isin = None
-            for kw, isin in keyword_to_isin.items():
-                if kw in row_html:
-                    # 排除野村優質(配息)等其他級別，確保抓到累積型
-                    if kw == "野村優質" and ("配息" in row_html or "S類型" in row_html or "N類型" in row_html):
-                        continue
-                    if kw == "台灣樂活" and ("B" in row_html or "配息" in row_html or "N" in row_html):
-                        continue
-                    matched_isin = isin
-                    break
-            if not matched_isin:
+    # 內建 2 次重試機制，防止政府主機偶發 Read timed out 漏抓
+    for attempt in range(2):
+        try:
+            r_post = session.post(url, data=post_data, headers={**HEADERS, "Referer": url}, timeout=25)
+            if r_post.status_code != 200:
+                time.sleep(1)
                 continue
+            r_post.encoding = "utf-8"
 
-            cells = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row_html, re.S | re.I)]
-            for cell in cells:
-                if re.match(r"^[\d,]+\.\d{2,4}$", cell):
-                    try:
-                        v = float(cell.replace(",", ""))
-                        if v > 0:
-                            found_navs[matched_isin] = (d_iso, round(v, 4))
-                            break
-                    except ValueError:
-                        pass
-    except Exception as e:
-        print(f"    [SITCA單日異常 {corp_id} {d_iso}] {e}")
+            new_hidden = parse_aspnet_hidden(r_post.text)
+            if new_hidden:
+                hidden_fields = new_hidden
+
+            rows = re.findall(r"<tr[^>]*>(.*?)</tr>", r_post.text, re.S | re.I)
+            for row_html in rows:
+                cells = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row_html, re.S | re.I)]
+                if len(cells) < 8:
+                    continue
+
+                # 精準比對儲存格中的基金代號 (如 T3218Y, T3201Y, T4209Y)
+                matched_isin = None
+                for cell in cells[:6]:
+                    if cell in code_to_isin:
+                        matched_isin = code_to_isin[cell]
+                        break
+
+                if not matched_isin:
+                    continue
+
+                for cell in cells[6:]:
+                    if re.match(r"^[\d,]+\.\d{2,4}$", cell):
+                        try:
+                            v = float(cell.replace(",", ""))
+                            if v > 0:
+                                found_navs[matched_isin] = (d_iso, round(v, 4))
+                                break
+                        except ValueError:
+                            pass
+            break  # 成功解析即跳出重試迴圈
+        except Exception as e:
+            if attempt == 0:
+                time.sleep(1.5)
+            else:
+                print(f"    [SITCA單日異常 {corp_id} {d_iso}] {e}")
 
     return found_navs, hidden_fields
+
 
 
 
@@ -263,30 +260,38 @@ def fetch_benchmark_history(ticker):
     return result
 
 
+def save_progress(merged_all, benchmarks_data):
+    """即時存檔函式：每完成一家投信就立刻寫入 data.json，確保進度不遺失"""
+    output = {
+        "updated_at": (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S CST"),
+        "funds": {name: dict(sorted(merged_all[name].items())) for name in FUNDS},
+        "benchmarks": benchmarks_data
+    }
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+
+
 def main():
     existing = load_existing_data()
     existing_funds = existing.get("funds", {})
     existing_benchmarks = existing.get("benchmarks", {})
-
-    output = {
-        "updated_at": (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S CST"),
-        "funds": {},
-        "benchmarks": {}
-    }
 
     session = requests.Session()
 
     # 1. 更新最新近 30 日淨值
     merged_all = {}
     for name, info in FUNDS.items():
-        print(f"Updating recent 30d: {name}...")
+        print(f"Updating recent 30d: {name}...", flush=True)
         records = dict(existing_funds.get(name, {}))
+        if name == "施羅德台灣樂活A":
+            records = {d: v for d, v in records.items() if v > 20}
+
         recent = fetch_mdj_recent_30(session, info["mdj_id"])
-        print(f"  -> MoneyDJ 近30日取得: {len(recent)} 筆")
+        print(f"  -> MoneyDJ 近30日取得: {len(recent)} 筆", flush=True)
         records.update(recent)
         merged_all[name] = records
 
-    # 2. 依投信分組往回逐日回補至 2010-01-04
+    # 2. 依投信分組往回逐日回補（單輪每家抓 35 個交易日，確保 1 分鐘內安全存檔）
     corps = {}
     for name, info in FUNDS.items():
         corp_id = info["sitca_corp"]
@@ -295,29 +300,28 @@ def main():
     for corp_id, corp_funds_map in corps.items():
         earliest_in_corp = max(min(r.keys()) if r else "9999-12-31" for r in corp_funds_map.values())
         if earliest_in_corp > START_DATE:
-            print(f"Backfilling SITCA corp {corp_id} (目前最早至 {earliest_in_corp})...")
-            backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=130)
+            print(f"Backfilling SITCA corp {corp_id} (目前最早至 {earliest_in_corp})...", flush=True)
+            backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=35)
+            # 每跑完一家投信就立刻存檔一次！
+            save_progress(merged_all, existing_benchmarks)
+            print(f"  -> 已即時保存 {corp_id} 回補進度至 data.json", flush=True)
 
     for name in FUNDS:
-        sorted_records = dict(sorted(merged_all[name].items()))
-        output["funds"][name] = sorted_records
-        dates = list(sorted_records.keys())
+        dates = sorted(merged_all[name].keys())
         if dates:
-            first_d = next(iter(dates))
-            last_d = dates[-1]
-            print(f"  -> {name} 最終總筆數: {len(dates)} 筆 ({first_d} ~ {last_d})")
-        else:
-            print(f"  -> {name} 最終總筆數: 0 筆")
+            print(f"  -> {name} 目前總筆數: {len(dates)} 筆 ({dates} ~ {dates[-1]})", flush=True)
 
     # 3. 更新大盤與 ETF 基準指標
+    benchmarks_out = dict(existing_benchmarks)
     for name, ticker in BENCHMARKS.items():
-        print(f"Fetching benchmark: {name} ({ticker})...")
+        print(f"Fetching benchmark: {name} ({ticker})...", flush=True)
         fetched = fetch_benchmark_history(ticker)
-        output["benchmarks"][name] = fetched if fetched else existing_benchmarks.get(name, {})
+        if fetched:
+            benchmarks_out[name] = fetched
 
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
-    print("Successfully updated data.json!")
+    save_progress(merged_all, benchmarks_out)
+    print("Successfully updated data.json!", flush=True)
+
 
 
 if __name__ == "__main__":
