@@ -631,7 +631,6 @@ function renderAll() {
   const patternTags = detectAndDrawPatterns(filteredActiveEntries, activeScaleId) || {};
 
   const fundPctList = toAlignedPctSeries(activeDict, alignedDates);
-  const spTwiiList = toAlignedSpreadSeries(activeDict, rawData.benchmarks['加權指數'] || {}, alignedDates);
 
   currentMetricsMap = {};
   const calcRet = (fullIdx, offset) => {
@@ -656,7 +655,7 @@ function renderAll() {
       d60: calcRet(fIdx, 60),
       d90: calcRet(fIdx, 90),
       cumPct: fundPctList.at(i)?.value,
-      spreadTwii: spTwiiList.at(i)?.value,
+      spreadTwii: undefined,
       patternTag: patternTags[d] || ''
     };
   });
@@ -667,7 +666,9 @@ function renderAll() {
   for (const bName of ['加權指數', '台積電(2330)', '00935']) {
     const bList = toAlignedPctSeries(rawData.benchmarks[bName] || {}, alignedDates);
     lineSeriesMap[bName].setData(bList);
-    benchPctMaps[bName] = Object.fromEntries(bList.filter(p => p.value !== undefined).map(p => [p.time, p.value]));
+    benchPctMaps[bName] = Object.fromEntries(
+      bList.filter(p => p.value !== undefined).map(p => [p.time, p.value])
+    );
   }
 
   // 4. 更新最下方圖表：嚴格等於「中間圖表基金報酬% － 中間圖表基準報酬%」
@@ -689,10 +690,15 @@ function renderAll() {
   spreadSeriesMap['diff_2330'].setData(sp2330List);
   spreadSeriesMap['diff_00935'].setData(sp00935List);
 
-  // 同步更新 Tooltip 查詢的價差數值
   spTwiiList.forEach(p => {
     if (currentMetricsMap[p.time]) currentMetricsMap[p.time].spreadTwii = p.value;
   });
+
+  klineChart.timeScale().fitContent();
+  compareChart.timeScale().fitContent();
+  spreadChart.timeScale().fitContent();
+}
+
 
 
 async function boot() {
