@@ -268,7 +268,7 @@ def main():
         corps.setdefault(corp_id, {})[name] = merged_all[name]
 
     for corp_id, corp_funds_map in corps.items():
-        backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18)
+        backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=105)
         save_progress(merged_all, existing_benchmarks)
 
     benchmarks_out = dict(existing_benchmarks)
