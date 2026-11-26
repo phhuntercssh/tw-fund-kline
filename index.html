@@ -91,10 +91,9 @@
 let rawData = null;
 let activeFund = '野村優質(累積)';
 
-let klineChart, ratioChart, compareChart, spreadChart;
+let klineChart, ratioChart, spreadChart;
 let topFundSeriesMap = {};
 let ratioSeriesMap = {};
-let lineSeriesMap = {};
 let spreadSeriesMap = {};
 let patternSeriesList = [];
 
@@ -134,31 +133,76 @@ function showError(msg) {
   }
 }
 
-function ensureRatioChartContainer() {
-  if (document.getElementById('ratio-chart')) return;
+function setupChartContainers() {
   const klineEl = document.getElementById('kline-chart');
-  if (!klineEl) return;
+  const compareEl = document.getElementById('compare-chart');
 
-  const klineCard = klineEl.parentElement;
-  const newCard = klineCard.cloneNode(false);
-  newCard.style.marginBottom = '16px';
+  // 1. 自動隱藏原本的「績效百分比比較圖（第三圖）」
+  if (compareEl && compareEl.parentElement) {
+    compareEl.parentElement.style.display = 'none';
+  }
 
-  newCard.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-      <div id="ratioTitle" style="font-weight:bold; font-size:15px; color:#fff;">
-        相對強弱比值指數（基準日 = 100，放大圖表自動以畫面起點重算）
+  // 2. 在最上方建立「相對強弱比值指數圖（第一圖）」
+  if (!document.getElementById('ratio-chart') && klineEl) {
+    const klineCard = klineEl.parentElement;
+    const newCard = klineCard.cloneNode(false);
+    newCard.style.marginBottom = '16px';
+
+    newCard.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+        <div id="ratioTitle" style="font-weight:bold; font-size:15px; color:#fff;">
+          相對強弱比值指數（基準日 = 100，放大圖表自動以畫面起點重算）
+        </div>
+        <div style="font-size:12.5px; display:flex; gap:14px; flex-wrap:wrap;">
+          <span style="color:#00bcd4;">● 線 A（基金 ÷ 00935）</span>
+          <span style="color:#e91e63;">● 線 B（基金 ÷ 台積電）</span>
+          <span style="color:#2962ff;">● 線 C（基金 ÷ 加權指數）</span>
+          <span id="ratioBaseBadge" style="color:#ffd54f; font-weight:bold;">[基準日：--]</span>
+        </div>
       </div>
-      <div style="font-size:12.5px; display:flex; gap:14px; flex-wrap:wrap;">
-        <span style="color:#00bcd4;">● 線 A（基金 ÷ 00935）</span>
-        <span style="color:#e91e63;">● 線 B（基金 ÷ 台積電）</span>
-        <span style="color:#2962ff;">● 線 C（基金 ÷ 加權指數）</span>
-        <span id="ratioBaseBadge" style="color:#ffd54f; font-weight:bold;">[基準日：--]</span>
-      </div>
-    </div>
-    <div id="ratio-chart" style="width:100%; height:${klineEl.style.height || '320px'};"></div>
-  `;
+      <div id="ratio-chart" style="width:100%; height:${klineEl.style.height || '320px'};"></div>
+    `;
+    klineCard.parentNode.insertBefore(newCard, klineCard);
+  }
 
-  klineCard.parentNode.insertBefore(newCard, klineCard);
+  // 3. 在第二圖（三檔基金淨值總覽）的最左側建立固定標示框，取代右側擋住線條的文字標籤
+  if (klineEl && !document.getElementById('leftFundLegendOverlay')) {
+    klineEl.style.position = 'relative';
+    const overlay = document.createElement('div');
+    overlay.id = 'leftFundLegendOverlay';
+    overlay.style.cssText = `
+      position: absolute; top: 8px; left: 68px; z-index: 20;
+      display: flex; flex-direction: column; gap: 4px;
+      pointer-events: none;
+    `;
+    klineEl.appendChild(overlay);
+  }
+}
+
+function updateLeftFundLegendOverlay(latestValuesMap) {
+  const overlay = document.getElementById('leftFundLegendOverlay');
+  if (!overlay) return;
+
+  let html = '';
+  for (const [fName, cfg] of Object.entries(TOP_FUND_CONFIG)) {
+    const val = latestValuesMap[fName];
+    const valText = (typeof val === 'number' && Number.isFinite(val)) ? val.toFixed(2) : '--';
+    const isCur = fName === activeFund;
+    html += `
+      <div style="
+        background: ${cfg.color}; color: #131722;
+        font-weight: bold; font-size: 12px;
+        padding: 2px 8px; border-radius: 3px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+        opacity: ${isCur ? '1' : '0.88'};
+        border: ${isCur ? '1.5px solid #ffffff' : '1px solid transparent'};
+        white-space: nowrap;
+      ">
+        ${fName}：${valText}
+      </div>
+    `;
+  }
+  overlay.innerHTML = html;
 }
 
 function buildCombinedControlBar() {
@@ -323,7 +367,7 @@ function recalculateRatioChartForVisibleRange(logicalRange) {
 }
 
 function initCharts() {
-  ensureRatioChartContainer();
+  setupChartContainers();
   buildCombinedControlBar();
 
   document.querySelectorAll('span').forEach(el => {
@@ -332,7 +376,6 @@ function initCharts() {
     if (el.innerText.includes('基金漲跌幅 - 00935漲跌幅')) el.style.color = '#00bcd4';
   });
 
-  // 關鍵設定：fixRightEdge: true 鎖定右邊界不脫離最新日期，rightOffset: 0 貼齊右側邊緣數字
   const commonOptions = {
     layout: { background: { color: '#1e222d' }, textColor: '#d1d4dc' },
     grid: { vertLines: { color: '#2b2b43' }, horzLines: { color: '#2b2b43' } },
@@ -346,6 +389,7 @@ function initCharts() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
 
+  // 第一圖：相對強弱比值指數（Base = 100）
   ratioChart = LightweightCharts.createChart(document.getElementById('ratio-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(1) }
@@ -359,9 +403,10 @@ function initCharts() {
     lineWidth: 1,
     lineStyle: LightweightCharts.LineStyle.Dashed,
     axisLabelVisible: true,
-    title: '100 基準'
+    title: ''
   });
 
+  // 第二圖：三檔基金淨值總覽（title 設為空字串，不再把名稱框壓在右側走勢線上，改在最左上角顯示）
   klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), {
     ...commonOptions,
     rightPriceScale: { visible: true, borderColor: '#485c7b' },
@@ -372,7 +417,7 @@ function initCharts() {
       color: cfg.color,
       priceScaleId: cfg.priceScaleId,
       lineWidth: fName === activeFund ? 3 : 1.5,
-      title: fName
+      title: ''
     });
   }
 
@@ -398,14 +443,7 @@ function initCharts() {
     }
   });
 
-  compareChart = LightweightCharts.createChart(document.getElementById('compare-chart'), {
-    ...commonOptions,
-    localization: { priceFormatter: p => p.toFixed(2) + '%' }
-  });
-  for (const [key, color] of Object.entries(BENCH_COLORS)) {
-    lineSeriesMap[key] = compareChart.addLineSeries({ color, lineWidth: key === 'fund' ? 3 : 2 });
-  }
-
+  // 第三圖（原第四圖）：超額報酬價差圖
   spreadChart = LightweightCharts.createChart(document.getElementById('spread-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) + '%' }
@@ -424,7 +462,7 @@ function initCharts() {
     lineWidth: 1,
     lineStyle: LightweightCharts.LineStyle.Dashed,
     axisLabelVisible: true,
-    title: '0% 基準'
+    title: ''
   });
 
 
@@ -434,10 +472,11 @@ function initCharts() {
 
 
 
-  const charts = [ratioChart, klineChart, compareChart, spreadChart];
+
+  const charts = [ratioChart, klineChart, spreadChart];
   let isSyncingRange = false;
 
-  charts.forEach((sourceChart, idx) => {
+  charts.forEach((sourceChart) => {
     sourceChart.timeScale().subscribeVisibleLogicalRangeChange(logicalRange => {
       if (isSyncingRange || !logicalRange || currentAlignedDates.length === 0) return;
       isSyncingRange = true;
@@ -477,7 +516,6 @@ function initCharts() {
     { key: 'd120', label: '120日' }
   ];
 
-  // 安全同步十字準線小工具：僅在數值為有效數字時才呼叫 setCrosshairPosition，避免 Value is null 報錯
   const safeSyncCrosshair = (chartObj, val, dateStr, seriesObj) => {
     if (!chartObj || !seriesObj) return;
     if (typeof val === 'number' && Number.isFinite(val)) {
@@ -508,8 +546,7 @@ function initCharts() {
 
       if (sourceIdx !== 0) safeSyncCrosshair(ratioChart, m.ratioC, dateStr, ratioSeriesMap['ratio_twii']);
       if (sourceIdx !== 1) safeSyncCrosshair(klineChart, m.nav, dateStr, topFundSeriesMap[activeFund]);
-      if (sourceIdx !== 2) safeSyncCrosshair(compareChart, m.cumPct, dateStr, lineSeriesMap['fund']);
-      if (sourceIdx !== 3) safeSyncCrosshair(spreadChart, m.spreadTwii, dateStr, spreadSeriesMap['diff_twii']);
+      if (sourceIdx !== 2) safeSyncCrosshair(spreadChart, m.spreadTwii, dateStr, spreadSeriesMap['diff_twii']);
 
       const comp = m.comp || {};
 
@@ -595,7 +632,8 @@ function initCharts() {
       tooltip.style.top = topPos + 'px';
     });
   });
-} 
+}
+
 
 
 
@@ -788,10 +826,16 @@ function renderAll() {
   const alignedDates = Array.from(unionDateSet).sort((a, b) => a.localeCompare(b));
   currentAlignedDates = alignedDates;
 
+  const latestFundValues = {};
   for (const fName of Object.keys(TOP_FUND_CONFIG)) {
     const fDict = rawData.funds[fName] || {};
     topFundSeriesMap[fName].setData(toAlignedNavSeries(fDict, alignedDates));
+    const validDatesForFund = alignedDates.filter(d => fDict[d] !== undefined);
+    if (validDatesForFund.length > 0) {
+      latestFundValues[fName] = fDict[validDatesForFund.at(-1)];
+    }
   }
+  updateLeftFundLegendOverlay(latestFundValues);
 
   const activeDict = rawData.funds[activeFund] || {};
   const allSortedActive = Object.entries(activeDict).sort((a, b) => a.at(0).localeCompare(b.at(0)));
@@ -844,11 +888,9 @@ function renderAll() {
 
   recalculateRatioChartForVisibleRange(null);
 
-  lineSeriesMap['fund'].setData(fundPctList);
   const benchPctMaps = {};
   for (const bName of ['加權指數', '台積電(2330)', '00935']) {
     const bList = toAlignedPctSeries(rawData.benchmarks[bName] || {}, alignedDates);
-    lineSeriesMap[bName].setData(bList);
     benchPctMaps[bName] = Object.fromEntries(
       bList.filter(p => p.value !== undefined).map(p => [p.time, p.value])
     );
@@ -878,7 +920,6 @@ function renderAll() {
 
   ratioChart.timeScale().fitContent();
   klineChart.timeScale().fitContent();
-  compareChart.timeScale().fitContent();
   spreadChart.timeScale().fitContent();
 }
 
@@ -901,6 +942,7 @@ async function boot() {
 
 boot();
 </script>
+
 
   
   
