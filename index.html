@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>台灣主動式基金 vs 大盤／台積電／00935 相對強弱分析</title>
-  <script src="https://unpkg.com"></script>
+  <script src="https://jsdelivr.net"
+          onerror="this.onerror=null;this.src='https://unpkg.com';"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -931,7 +932,13 @@ async function boot() {
   }
 }
 
-boot();
+window.addEventListener('DOMContentLoaded', () => {
+  if (typeof LightweightCharts === 'undefined') {
+    showError('⚠️ 圖表繪製元件載入失敗，請檢查網路連線或按 Ctrl + Shift + R 重新整理。');
+    return;
+  }
+  boot();
+});
 </script>
 </body>
 </html>
