@@ -442,7 +442,6 @@ function initCharts() {
       if (isSyncingRange || !logicalRange || currentAlignedDates.length === 0) return;
       isSyncingRange = true;
 
-      // 強制將右邊界釘住最後一根交易日（不脫離最邊緣數字），僅讓左邊界隨滾輪縮放推進
       const lastIdx = currentAlignedDates.length - 1;
       const span = Math.max(5, logicalRange.to - logicalRange.from);
       const clampedRange = {
@@ -478,6 +477,20 @@ function initCharts() {
     { key: 'd120', label: '120日' }
   ];
 
+  // 安全同步十字準線小工具：僅在數值為有效數字時才呼叫 setCrosshairPosition，避免 Value is null 報錯
+  const safeSyncCrosshair = (chartObj, val, dateStr, seriesObj) => {
+    if (!chartObj || !seriesObj) return;
+    if (typeof val === 'number' && Number.isFinite(val)) {
+      try {
+        chartObj.setCrosshairPosition(val, dateStr, seriesObj);
+      } catch (e) {}
+    } else {
+      try {
+        chartObj.clearCrosshairPosition();
+      } catch (e) {}
+    }
+  };
+
   charts.forEach((sourceChart, sourceIdx) => {
     sourceChart.subscribeCrosshairMove(param => {
       if (!param.point || !param.time || param.point.x < 0 || param.point.y < 0) {
@@ -493,25 +506,17 @@ function initCharts() {
       const m = currentMetricsMap[dateStr];
       if (!m) return;
 
-      if (sourceIdx !== 0 && m.ratioC !== undefined) {
-        ratioChart.setCrosshairPosition(m.ratioC, dateStr, ratioSeriesMap['ratio_twii']);
-      }
-      if (sourceIdx !== 1 && m.nav !== undefined && topFundSeriesMap[activeFund]) {
-        klineChart.setCrosshairPosition(m.nav, dateStr, topFundSeriesMap[activeFund]);
-      }
-      if (sourceIdx !== 2 && m.cumPct !== undefined) {
-        compareChart.setCrosshairPosition(m.cumPct, dateStr, lineSeriesMap['fund']);
-      }
-      if (sourceIdx !== 3 && m.spreadTwii !== undefined) {
-        spreadChart.setCrosshairPosition(m.spreadTwii, dateStr, spreadSeriesMap['diff_twii']);
-      }
+      if (sourceIdx !== 0) safeSyncCrosshair(ratioChart, m.ratioC, dateStr, ratioSeriesMap['ratio_twii']);
+      if (sourceIdx !== 1) safeSyncCrosshair(klineChart, m.nav, dateStr, topFundSeriesMap[activeFund]);
+      if (sourceIdx !== 2) safeSyncCrosshair(compareChart, m.cumPct, dateStr, lineSeriesMap['fund']);
+      if (sourceIdx !== 3) safeSyncCrosshair(spreadChart, m.spreadTwii, dateStr, spreadSeriesMap['diff_twii']);
 
       const comp = m.comp || {};
 
       const priceCells = COL_KEYS.map(k => {
         const p = comp[k]?.price;
         return `<td style="padding:3px 7px; text-align:right; color:#b2b5be; font-size:11.5px; border-bottom:1px solid #363a45;">
-          ${p !== undefined ? p.toFixed(2) : '--'}
+          ${typeof p === 'number' && Number.isFinite(p) ? p.toFixed(2) : '--'}
         </td>`;
       }).join('');
 
@@ -519,14 +524,14 @@ function initCharts() {
         let maxVal = -Infinity;
         COL_KEYS.forEach(k => {
           const val = comp[k]?.[row.key];
-          if (val !== null && val !== undefined && !Number.isNaN(val) && val > maxVal) {
+          if (typeof val === 'number' && Number.isFinite(val) && val > maxVal) {
             maxVal = val;
           }
         });
 
         const cells = COL_KEYS.map(k => {
           const val = comp[k]?.[row.key];
-          if (val === null || val === undefined || Number.isNaN(val)) {
+          if (typeof val !== 'number' || !Number.isFinite(val)) {
             return `<td style="padding:4px 7px; text-align:right; color:#787b86;">--</td>`;
           }
           const isFirst = (maxVal > -Infinity) && (Math.abs(val - maxVal) < 1e-6);
@@ -590,7 +595,7 @@ function initCharts() {
       tooltip.style.top = topPos + 'px';
     });
   });
-}
+
 
 
 
