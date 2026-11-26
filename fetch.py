@@ -5,6 +5,13 @@ import time
 import datetime
 import requests
 import yfinance as yf
+import urllib.request
+
+if not os.path.exists("lightweight-charts.standalone.production.js"):
+    urllib.request.urlretrieve(
+        "https://jsdelivr.net",
+        "lightweight-charts.standalone.production.js"
+    )
 
 FUNDS = {
     "野村台灣運籌": {
