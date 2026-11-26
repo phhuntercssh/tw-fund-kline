@@ -245,7 +245,7 @@ def find_missing_gaps(corp_funds_map):
     return gaps
 
 
-def backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18):
+def backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=80):
     """優先修補中間斷層空洞與最新淨值，空洞修補完後自動接續往 2010 年推進"""
     try:
         url, hidden_fields = init_sitca_session(session)
@@ -401,7 +401,7 @@ def main():
 
     for corp_id, corp_funds_map in corps.items():
         print(f"Processing SITCA corp {corp_id}...", flush=True)
-        backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=18)
+        backfill_corp_days(session, corp_id, corp_funds_map, max_trading_days=80)
         save_progress(merged_all, existing_benchmarks)
         print(f"  -> 已即時保存 {corp_id} 進度至 data.json", flush=True)
 
