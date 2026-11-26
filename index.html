@@ -84,7 +84,20 @@
     <span id="updateTime" class="note" style="margin-left:auto;">載入中...</span>
   </div>
 
-  <!-- 第一圖：相對強弱比值指數（Base = 100，放大自動重算基準日） -->
+  <!-- 第一圖（最上方）：60 日滾動 Z-Score（±2σ 偏離度指標） -->
+  <div class="chart-card">
+    <div class="chart-header">
+      <div id="zscoreTitle" class="chart-title">相對強弱比值 — 60 日滾動 Z-Score（±2σ 偏離度指標）</div>
+      <div class="legend-group">
+        <span style="color:#00bcd4;">● Z-Score A（÷ 00935）</span>
+        <span style="color:#e91e63;">● Z-Score B（÷ 台積電）</span>
+        <span style="color:#2962ff;">● Z-Score C（÷ 加權指數）</span>
+      </div>
+    </div>
+    <div id="zscore-chart" class="chart-box"></div>
+  </div>
+
+  <!-- 第二圖：相對強弱比值指數（Base = 100，放大自動重算基準日） -->
   <div class="chart-card">
     <div class="chart-header">
       <div id="ratioTitle" class="chart-title">相對強弱比值指數（基準日 = 100，放大圖表自動以畫面起點重算）</div>
@@ -98,7 +111,7 @@
     <div id="ratio-chart" class="chart-box"></div>
   </div>
 
-  <!-- 第二圖：三檔基金淨值總覽（雙座標軸 + 左上角淨值標示框 + 綠白型態粗線） -->
+  <!-- 第三圖：三檔基金淨值總覽（雙座標軸 + 左上角淨值標示框 + 綠白型態粗線） -->
   <div class="chart-card">
     <div class="chart-header">
       <div id="klineTitle" class="chart-title">三檔基金淨值總覽</div>
@@ -112,18 +125,6 @@
     </div>
   </div>
 
-  <!-- 第三圖：圖一三線之 60 日滾動 Z-Score -->
-  <div class="chart-card">
-    <div class="chart-header">
-      <div id="zscoreTitle" class="chart-title">相對強弱比值 — 60 日滾動 Z-Score（±2σ 偏離度指標）</div>
-      <div class="legend-group">
-        <span style="color:#00bcd4;">● Z-Score A（÷ 00935）</span>
-        <span style="color:#e91e63;">● Z-Score B（÷ 台積電）</span>
-        <span style="color:#2962ff;">● Z-Score C（÷ 加權指數）</span>
-      </div>
-    </div>
-    <div id="zscore-chart" class="chart-box"></div>
-  </div>
 
 
 
@@ -133,10 +134,10 @@
 let rawData = null;
 let activeFund = '野村優質(累積)';
 
-let ratioChart, klineChart, zscoreChart;
+let zscoreChart, ratioChart, klineChart;
+let zscoreSeriesMap = {};
 let ratioSeriesMap = {};
 let topFundSeriesMap = {};
-let zscoreSeriesMap = {};
 let patternSeriesList = [];
 
 let currentMetricsMap = {};
@@ -305,6 +306,7 @@ function selectActiveFund(fundName) {
 
 
 
+
   
 function recalculateRatioChartForVisibleRange(logicalRange) {
   if (!currentAlignedDates || currentAlignedDates.length === 0) return;
@@ -380,7 +382,41 @@ function initCharts() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
 
-  // 第一圖：相對強弱比值指數（Base = 100）
+  // 第一圖（最上方）：60 日滾動 Z-Score
+  zscoreChart = LightweightCharts.createChart(document.getElementById('zscore-chart'), {
+    ...commonOptions,
+    localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) }
+  });
+  zscoreSeriesMap['z_00935'] = zscoreChart.addLineSeries({ color: BENCH_COLORS['00935'], lineWidth: 2 });
+  zscoreSeriesMap['z_2330'] = zscoreChart.addLineSeries({ color: BENCH_COLORS['台積電(2330)'], lineWidth: 2 });
+  zscoreSeriesMap['z_twii'] = zscoreChart.addLineSeries({ color: BENCH_COLORS['加權指數'], lineWidth: 2 });
+
+  zscoreSeriesMap['z_twii'].createPriceLine({
+    price: 2.0,
+    color: '#ef5350',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true,
+    title: '+2σ'
+  });
+  zscoreSeriesMap['z_twii'].createPriceLine({
+    price: 0,
+    color: '#787b86',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true,
+    title: '0'
+  });
+  zscoreSeriesMap['z_twii'].createPriceLine({
+    price: -2.0,
+    color: '#26a69a',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true,
+    title: '-2σ'
+  });
+
+  // 第二圖：相對強弱比值指數（Base = 100）
   ratioChart = LightweightCharts.createChart(document.getElementById('ratio-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(1) }
@@ -397,7 +433,7 @@ function initCharts() {
     title: ''
   });
 
-  // 第二圖：三檔基金淨值總覽
+  // 第三圖：三檔基金淨值總覽
   klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), {
     ...commonOptions,
     rightPriceScale: { visible: true, borderColor: '#485c7b' },
@@ -434,40 +470,6 @@ function initCharts() {
     }
   });
 
-  // 第三圖：圖一三線之 60 日滾動 Z-Score
-  zscoreChart = LightweightCharts.createChart(document.getElementById('zscore-chart'), {
-    ...commonOptions,
-    localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) }
-  });
-  zscoreSeriesMap['z_00935'] = zscoreChart.addLineSeries({ color: BENCH_COLORS['00935'], lineWidth: 2 });
-  zscoreSeriesMap['z_2330'] = zscoreChart.addLineSeries({ color: BENCH_COLORS['台積電(2330)'], lineWidth: 2 });
-  zscoreSeriesMap['z_twii'] = zscoreChart.addLineSeries({ color: BENCH_COLORS['加權指數'], lineWidth: 2 });
-
-  // Z-Score 參考基準線：+2.0、0.0、-2.0
-  zscoreSeriesMap['z_twii'].createPriceLine({
-    price: 2.0,
-    color: '#ef5350',
-    lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
-    axisLabelVisible: true,
-    title: '+2σ'
-  });
-  zscoreSeriesMap['z_twii'].createPriceLine({
-    price: 0,
-    color: '#787b86',
-    lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
-    axisLabelVisible: true,
-    title: '0'
-  });
-  zscoreSeriesMap['z_twii'].createPriceLine({
-    price: -2.0,
-    color: '#26a69a',
-    lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
-    axisLabelVisible: true,
-    title: '-2σ'
-  });
 
 
 
@@ -479,7 +481,7 @@ function initCharts() {
 
 
 
-  const charts = [ratioChart, klineChart, zscoreChart];
+    const charts = [zscoreChart, ratioChart, klineChart];
   let isSyncingRange = false;
 
   charts.forEach((sourceChart) => {
@@ -556,9 +558,9 @@ function initCharts() {
       const m = currentMetricsMap[dateStr];
       if (!m) return;
 
-      if (sourceIdx !== 0) safeSyncCrosshair(ratioChart, m.ratioC, dateStr, ratioSeriesMap['ratio_twii']);
-      if (sourceIdx !== 1) safeSyncCrosshair(klineChart, m.nav, dateStr, topFundSeriesMap[activeFund]);
-      if (sourceIdx !== 2) safeSyncCrosshair(zscoreChart, m.zTwii, dateStr, zscoreSeriesMap['z_twii']);
+      if (sourceIdx !== 0) safeSyncCrosshair(zscoreChart, m.zTwii, dateStr, zscoreSeriesMap['z_twii']);
+      if (sourceIdx !== 1) safeSyncCrosshair(ratioChart, m.ratioC, dateStr, ratioSeriesMap['ratio_twii']);
+      if (sourceIdx !== 2) safeSyncCrosshair(klineChart, m.nav, dateStr, topFundSeriesMap[activeFund]);
 
       const comp = m.comp || {};
 
@@ -651,13 +653,14 @@ function initCharts() {
   });
 
   window.addEventListener('resize', () => {
-    [ratioChart, klineChart, zscoreChart].forEach(c => {
+    [zscoreChart, ratioChart, klineChart].forEach(c => {
       if (c && c.chartElement()) {
         c.applyOptions({ width: c.chartElement().parentElement.clientWidth });
       }
     });
   });
 }
+
 
 
 
@@ -788,6 +791,22 @@ function toAlignedNavSeries(targetDict, alignedDates) {
   });
 }
 
+// 消除因投信淨值(晚間公布)與台股收盤價(下午公布)的時間差所造成的「落後 1 格」現象
+function buildForwardFilledBenchDict(rawBenchDict, targetDates) {
+  const filled = { ...rawBenchDict };
+  const sortedAllKeys = Object.keys(filled).sort((a, b) => a.localeCompare(b));
+  let lastKnownVal = sortedAllKeys.length > 0 ? filled[sortedAllKeys[0]] : undefined;
+
+  for (const d of targetDates) {
+    if (typeof filled[d] === 'number' && filled[d] > 0) {
+      lastKnownVal = filled[d];
+    } else if (lastKnownVal !== undefined) {
+      filled[d] = lastKnownVal;
+    }
+  }
+  return filled;
+}
+
 function buildMultiAssetReturnLookup(dictObj) {
   const sortedEntries = Object.entries(dictObj || {}).sort((a, b) => a.at(0).localeCompare(b.at(0)));
   const lookup = {};
@@ -815,7 +834,6 @@ function buildMultiAssetReturnLookup(dictObj) {
   return lookup;
 }
 
-// 計算完整歷史的 60 日滾動 Z-Score（利用全歷史資料計算，即使切到「近30天」也能準確算出前60日Z-Score）
 function buildRollingZScoreLookup(fundDict, benchDict, windowSize = 60) {
   const commonDates = Object.keys(fundDict || {})
     .filter(d => typeof fundDict[d] === 'number' && typeof benchDict[d] === 'number' && benchDict[d] > 0)
@@ -878,9 +896,11 @@ function renderAll() {
   const activeScaleId = TOP_FUND_CONFIG[activeFund].priceScaleId;
   const patternTags = detectAndDrawPatterns(filteredActiveEntries, activeScaleId) || {};
 
-  const dict00935 = rawData.benchmarks['00935'] || {};
-  const dict2330 = rawData.benchmarks['台積電(2330)'] || {};
-  const dictTwii = rawData.benchmarks['加權指數'] || {};
+  // 使用全歷史日期序列補齊因投信與台股公布時間差造成的最後 1 格落差
+  const allFundDates = Object.keys(activeDict).sort((a, b) => a.localeCompare(b));
+  const dict00935 = buildForwardFilledBenchDict(rawData.benchmarks['00935'] || {}, allFundDates);
+  const dict2330 = buildForwardFilledBenchDict(rawData.benchmarks['台積電(2330)'] || {}, allFundDates);
+  const dictTwii = buildForwardFilledBenchDict(rawData.benchmarks['加權指數'] || {}, allFundDates);
 
   const compLookups = {
     '運籌': buildMultiAssetReturnLookup(rawData.funds['野村台灣運籌']),
@@ -889,7 +909,6 @@ function renderAll() {
     '935': buildMultiAssetReturnLookup(dict00935)
   };
 
-  // 計算圖一三條比值線的 60 日滾動 Z-Score
   const zLookup00935 = buildRollingZScoreLookup(activeDict, dict00935, 60);
   const zLookup2330 = buildRollingZScoreLookup(activeDict, dict2330, 60);
   const zLookupTwii = buildRollingZScoreLookup(activeDict, dictTwii, 60);
@@ -940,9 +959,9 @@ function renderAll() {
   zscoreSeriesMap['z_2330'].setData(zSeries2330);
   zscoreSeriesMap['z_twii'].setData(zSeriesTwii);
 
+  zscoreChart.timeScale().fitContent();
   ratioChart.timeScale().fitContent();
   klineChart.timeScale().fitContent();
-  zscoreChart.timeScale().fitContent();
 }
 
 async function boot() {
@@ -964,7 +983,7 @@ async function boot() {
 
 window.addEventListener('DOMContentLoaded', () => {
   if (typeof LightweightCharts === 'undefined') {
-    showError('⚠️ 圖表繪製元件載入失敗，請檢查網路連線或按 Ctrl + Shift + R 重新整理。');
+    showError('⚠️ 圖表繪製元件載入失敗，請確認倉庫已有 lightweight-charts.js 或按 Ctrl + Shift + R 重新整理。');
     return;
   }
   boot();
@@ -972,4 +991,5 @@ window.addEventListener('DOMContentLoaded', () => {
 </script>
 </body>
 </html>
+
 
