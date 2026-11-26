@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>台灣主動式基金 vs 大盤／台積電／00935 相對強弱分析</title>
   <script src="./lightweight-charts.js"
-          onerror="this.onerror=null;this.src='https://jsdelivr.net';"></script>
+          onerror="this.onerror=null;this.src='https://cloudflare.com';"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -112,18 +112,19 @@
     </div>
   </div>
 
-  <!-- 第三圖：超額報酬價差圖 -->
+  <!-- 第三圖：圖一三線之 60 日滾動 Z-Score -->
   <div class="chart-card">
     <div class="chart-header">
-      <div class="chart-title">累積超額報酬價差（基金累積漲跌幅 − 基準累積漲跌幅）</div>
+      <div id="zscoreTitle" class="chart-title">相對強弱比值 — 60 日滾動 Z-Score（±2σ 偏離度指標）</div>
       <div class="legend-group">
-        <span style="color:#2962ff;">● 基金漲跌幅 - 大盤漲跌幅</span>
-        <span style="color:#e91e63;">● 基金漲跌幅 - 台積電漲跌幅</span>
-        <span style="color:#00bcd4;">● 基金漲跌幅 - 00935漲跌幅</span>
+        <span style="color:#00bcd4;">● Z-Score A（÷ 00935）</span>
+        <span style="color:#e91e63;">● Z-Score B（÷ 台積電）</span>
+        <span style="color:#2962ff;">● Z-Score C（÷ 加權指數）</span>
       </div>
     </div>
-    <div id="spread-chart" class="chart-box"></div>
+    <div id="zscore-chart" class="chart-box"></div>
   </div>
+
 
 
 
@@ -132,10 +133,10 @@
 let rawData = null;
 let activeFund = '野村優質(累積)';
 
-let ratioChart, klineChart, spreadChart;
+let ratioChart, klineChart, zscoreChart;
 let ratioSeriesMap = {};
 let topFundSeriesMap = {};
-let spreadSeriesMap = {};
+let zscoreSeriesMap = {};
 let patternSeriesList = [];
 
 let currentMetricsMap = {};
@@ -303,6 +304,7 @@ function selectActiveFund(fundName) {
 
 
 
+
   
 function recalculateRatioChartForVisibleRange(logicalRange) {
   if (!currentAlignedDates || currentAlignedDates.length === 0) return;
@@ -378,6 +380,7 @@ function initCharts() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
 
+  // 第一圖：相對強弱比值指數（Base = 100）
   ratioChart = LightweightCharts.createChart(document.getElementById('ratio-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(1) }
@@ -394,6 +397,7 @@ function initCharts() {
     title: ''
   });
 
+  // 第二圖：三檔基金淨值總覽
   klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), {
     ...commonOptions,
     rightPriceScale: { visible: true, borderColor: '#485c7b' },
@@ -430,25 +434,39 @@ function initCharts() {
     }
   });
 
-  spreadChart = LightweightCharts.createChart(document.getElementById('spread-chart'), {
+  // 第三圖：圖一三線之 60 日滾動 Z-Score
+  zscoreChart = LightweightCharts.createChart(document.getElementById('zscore-chart'), {
     ...commonOptions,
-    localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) + '%' }
+    localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) }
   });
-  const spreadColors = {
-    'diff_twii': BENCH_COLORS['加權指數'],
-    'diff_2330': BENCH_COLORS['台積電(2330)'],
-    'diff_00935': BENCH_COLORS['00935']
-  };
-  for (const [key, color] of Object.entries(spreadColors)) {
-    spreadSeriesMap[key] = spreadChart.addLineSeries({ color, lineWidth: 2 });
-  }
-  spreadSeriesMap['diff_twii'].createPriceLine({
+  zscoreSeriesMap['z_00935'] = zscoreChart.addLineSeries({ color: BENCH_COLORS['00935'], lineWidth: 2 });
+  zscoreSeriesMap['z_2330'] = zscoreChart.addLineSeries({ color: BENCH_COLORS['台積電(2330)'], lineWidth: 2 });
+  zscoreSeriesMap['z_twii'] = zscoreChart.addLineSeries({ color: BENCH_COLORS['加權指數'], lineWidth: 2 });
+
+  // Z-Score 參考基準線：+2.0、0.0、-2.0
+  zscoreSeriesMap['z_twii'].createPriceLine({
+    price: 2.0,
+    color: '#ef5350',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true,
+    title: '+2σ'
+  });
+  zscoreSeriesMap['z_twii'].createPriceLine({
     price: 0,
     color: '#787b86',
     lineWidth: 1,
     lineStyle: LightweightCharts.LineStyle.Dashed,
     axisLabelVisible: true,
-    title: ''
+    title: '0'
+  });
+  zscoreSeriesMap['z_twii'].createPriceLine({
+    price: -2.0,
+    color: '#26a69a',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true,
+    title: '-2σ'
   });
 
 
@@ -460,7 +478,8 @@ function initCharts() {
 
 
 
-  const charts = [ratioChart, klineChart, spreadChart];
+
+  const charts = [ratioChart, klineChart, zscoreChart];
   let isSyncingRange = false;
 
   charts.forEach((sourceChart) => {
@@ -516,6 +535,12 @@ function initCharts() {
     }
   };
 
+  const fmtZ = (z) => {
+    if (typeof z !== 'number' || !Number.isFinite(z)) return '--';
+    const c = z >= 2 ? '#ef5350' : (z <= -2 ? '#26a69a' : '#e0e3eb');
+    return `<b style="color:${c};">${z >= 0 ? '+' : ''}${z.toFixed(2)}</b>`;
+  };
+
   charts.forEach((sourceChart, sourceIdx) => {
     sourceChart.subscribeCrosshairMove(param => {
       if (!param.point || !param.time || param.point.x < 0 || param.point.y < 0) {
@@ -533,7 +558,7 @@ function initCharts() {
 
       if (sourceIdx !== 0) safeSyncCrosshair(ratioChart, m.ratioC, dateStr, ratioSeriesMap['ratio_twii']);
       if (sourceIdx !== 1) safeSyncCrosshair(klineChart, m.nav, dateStr, topFundSeriesMap[activeFund]);
-      if (sourceIdx !== 2) safeSyncCrosshair(spreadChart, m.spreadTwii, dateStr, spreadSeriesMap['diff_twii']);
+      if (sourceIdx !== 2) safeSyncCrosshair(zscoreChart, m.zTwii, dateStr, zscoreSeriesMap['z_twii']);
 
       const comp = m.comp || {};
 
@@ -600,10 +625,15 @@ function initCharts() {
             ${periodRowsHtml}
           </tbody>
         </table>
+        <div style="margin-top:6px; padding-top:5px; border-top:1px solid #363a45; font-size:11.5px; display:flex; justify-content:space-between; gap:8px;">
+          <span><span style="color:#00bcd4;">●</span> 935 Z:${fmtZ(m.z00935)}</span>
+          <span><span style="color:#e91e63;">●</span> 台積 Z:${fmtZ(m.z2330)}</span>
+          <span><span style="color:#2962ff;">●</span> 大盤 Z:${fmtZ(m.zTwii)}</span>
+        </div>
       `;
 
       if (m.patternTag) {
-        html += `<div style="margin-top:6px; padding-top:5px; border-top:1px dashed #485c7b; font-size:11.5px;">${m.patternTag}</div>`;
+        html += `<div style="margin-top:5px; padding-top:5px; border-top:1px dashed #485c7b; font-size:11.5px;">${m.patternTag}</div>`;
       }
 
       tooltip.innerHTML = html;
@@ -612,7 +642,7 @@ function initCharts() {
       const mouseX = param.sourceEvent ? param.sourceEvent.clientX : 0;
       const mouseY = param.sourceEvent ? param.sourceEvent.clientY : 0;
       const boxW = tooltip.offsetWidth || 355;
-      const boxH = tooltip.offsetHeight || 265;
+      const boxH = tooltip.offsetHeight || 295;
       const leftPos = (mouseX + boxW + 20 > window.innerWidth) ? (mouseX - boxW - 15) : (mouseX + 16);
       const topPos = (mouseY + boxH + 20 > window.innerHeight) ? Math.max(10, window.innerHeight - boxH - 15) : (mouseY + 16);
       tooltip.style.left = leftPos + 'px';
@@ -621,7 +651,7 @@ function initCharts() {
   });
 
   window.addEventListener('resize', () => {
-    [ratioChart, klineChart, spreadChart].forEach(c => {
+    [ratioChart, klineChart, zscoreChart].forEach(c => {
       if (c && c.chartElement()) {
         c.applyOptions({ width: c.chartElement().parentElement.clientWidth });
       }
@@ -758,18 +788,6 @@ function toAlignedNavSeries(targetDict, alignedDates) {
   });
 }
 
-function toAlignedPctSeries(targetDict, alignedDates) {
-  const validDates = alignedDates.filter(d => targetDict[d] !== undefined);
-  if (validDates.length === 0) return [];
-  const base = targetDict[validDates.at(0)];
-  return alignedDates.map(d => {
-    const val = targetDict[d];
-    return val !== undefined
-      ? { time: d, value: ((val - base) / base) * 100 }
-      : { time: d };
-  });
-}
-
 function buildMultiAssetReturnLookup(dictObj) {
   const sortedEntries = Object.entries(dictObj || {}).sort((a, b) => a.at(0).localeCompare(b.at(0)));
   const lookup = {};
@@ -797,6 +815,26 @@ function buildMultiAssetReturnLookup(dictObj) {
   return lookup;
 }
 
+// 計算完整歷史的 60 日滾動 Z-Score（利用全歷史資料計算，即使切到「近30天」也能準確算出前60日Z-Score）
+function buildRollingZScoreLookup(fundDict, benchDict, windowSize = 60) {
+  const commonDates = Object.keys(fundDict || {})
+    .filter(d => typeof fundDict[d] === 'number' && typeof benchDict[d] === 'number' && benchDict[d] > 0)
+    .sort((a, b) => a.localeCompare(b));
+
+  const ratios = commonDates.map(d => fundDict[d] / benchDict[d]);
+  const zLookup = {};
+
+  for (let i = 0; i < commonDates.length; i++) {
+    if (i + 1 < windowSize) continue;
+    const slice = ratios.slice(i + 1 - windowSize, i + 1);
+    const mean = slice.reduce((acc, v) => acc + v, 0) / windowSize;
+    const variance = slice.reduce((acc, v) => acc + (v - mean) * (v - mean), 0) / windowSize;
+    const std = Math.sqrt(variance);
+    zLookup[commonDates[i]] = std > 1e-12 ? (ratios[i] - mean) / std : 0;
+  }
+  return zLookup;
+}
+
 function renderAll() {
   if (!rawData) return;
   const start = currentStartDate;
@@ -806,6 +844,10 @@ function renderAll() {
   const ratioTitleEl = document.getElementById('ratioTitle');
   if (ratioTitleEl) {
     ratioTitleEl.innerText = `${activeFund} — 相對強弱比值指數（基準日 = 100，放大圖表自動以畫面起點重算）`;
+  }
+  const zscoreTitleEl = document.getElementById('zscoreTitle');
+  if (zscoreTitleEl) {
+    zscoreTitleEl.innerText = `${activeFund} — 相對強弱比值 60 日滾動 Z-Score（±2σ 偏離度指標）`;
   }
 
   const unionDateSet = new Set();
@@ -836,8 +878,6 @@ function renderAll() {
   const activeScaleId = TOP_FUND_CONFIG[activeFund].priceScaleId;
   const patternTags = detectAndDrawPatterns(filteredActiveEntries, activeScaleId) || {};
 
-  const fundPctList = toAlignedPctSeries(activeDict, alignedDates);
-
   const dict00935 = rawData.benchmarks['00935'] || {};
   const dict2330 = rawData.benchmarks['台積電(2330)'] || {};
   const dictTwii = rawData.benchmarks['加權指數'] || {};
@@ -848,6 +888,11 @@ function renderAll() {
     '樂活': buildMultiAssetReturnLookup(rawData.funds['施羅德台灣樂活A']),
     '935': buildMultiAssetReturnLookup(dict00935)
   };
+
+  // 計算圖一三條比值線的 60 日滾動 Z-Score
+  const zLookup00935 = buildRollingZScoreLookup(activeDict, dict00935, 60);
+  const zLookup2330 = buildRollingZScoreLookup(activeDict, dict2330, 60);
+  const zLookupTwii = buildRollingZScoreLookup(activeDict, dictTwii, 60);
 
   currentRawRatioMaps = { ratio_00935: {}, ratio_2330: {}, ratio_twii: {} };
   for (const d of alignedDates) {
@@ -860,7 +905,17 @@ function renderAll() {
   }
 
   currentMetricsMap = {};
-  alignedDates.forEach((d, i) => {
+  const zSeries00935 = [], zSeries2330 = [], zSeriesTwii = [];
+
+  alignedDates.forEach((d) => {
+    const zA = zLookup00935[d];
+    const zB = zLookup2330[d];
+    const zC = zLookupTwii[d];
+
+    zSeries00935.push(zA !== undefined ? { time: d, value: zA } : { time: d });
+    zSeries2330.push(zB !== undefined ? { time: d, value: zB } : { time: d });
+    zSeriesTwii.push(zC !== undefined ? { time: d, value: zC } : { time: d });
+
     currentMetricsMap[d] = {
       nav: activeDict[d],
       comp: {
@@ -869,50 +924,25 @@ function renderAll() {
         '樂活': compLookups['樂活'][d],
         '935': compLookups['935'][d]
       },
-      cumPct: fundPctList.at(i)?.value,
-      spreadTwii: undefined,
       ratioA: undefined,
       ratioB: undefined,
       ratioC: undefined,
+      z00935: zA,
+      z2330: zB,
+      zTwii: zC,
       patternTag: patternTags[d] || ''
     };
   });
 
   recalculateRatioChartForVisibleRange(null);
 
-  const benchPctMaps = {};
-  for (const bName of ['加權指數', '台積電(2330)', '00935']) {
-    const bList = toAlignedPctSeries(rawData.benchmarks[bName] || {}, alignedDates);
-    benchPctMaps[bName] = Object.fromEntries(
-      bList.filter(p => p.value !== undefined).map(p => [p.time, p.value])
-    );
-  }
-
-  const buildExactSpread = (bName) => {
-    return alignedDates.map(d => {
-      const fVal = currentMetricsMap[d]?.cumPct;
-      const bVal = benchPctMaps[bName]?.[d];
-      return (fVal !== undefined && bVal !== undefined)
-        ? { time: d, value: fVal - bVal }
-        : { time: d };
-    });
-  };
-
-  const exactTwiiSpread = buildExactSpread('加權指數');
-  const exact2330Spread = buildExactSpread('台積電(2330)');
-  const exact00935Spread = buildExactSpread('00935');
-
-  spreadSeriesMap['diff_twii'].setData(exactTwiiSpread);
-  spreadSeriesMap['diff_2330'].setData(exact2330Spread);
-  spreadSeriesMap['diff_00935'].setData(exact00935Spread);
-
-  exactTwiiSpread.forEach(p => {
-    if (currentMetricsMap[p.time]) currentMetricsMap[p.time].spreadTwii = p.value;
-  });
+  zscoreSeriesMap['z_00935'].setData(zSeries00935);
+  zscoreSeriesMap['z_2330'].setData(zSeries2330);
+  zscoreSeriesMap['z_twii'].setData(zSeriesTwii);
 
   ratioChart.timeScale().fitContent();
   klineChart.timeScale().fitContent();
-  spreadChart.timeScale().fitContent();
+  zscoreChart.timeScale().fitContent();
 }
 
 async function boot() {
