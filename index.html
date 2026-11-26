@@ -139,15 +139,14 @@ function showError(msg) {
   }
 }
 
+// 將「相對強弱比值指數圖」插入到最上方（三檔基金淨值總覽的上面），成為第一圖
 function ensureRatioChartContainer() {
   if (document.getElementById('ratio-chart')) return;
   const klineEl = document.getElementById('kline-chart');
-  const compareEl = document.getElementById('compare-chart');
-  if (!klineEl || !compareEl) return;
+  if (!klineEl) return;
 
-  const compareCard = compareEl.parentElement;
-  const newCard = compareCard.cloneNode(false);
-  newCard.style.marginTop = '16px';
+  const klineCard = klineEl.parentElement;
+  const newCard = klineCard.cloneNode(false);
   newCard.style.marginBottom = '16px';
 
   newCard.innerHTML = `
@@ -165,7 +164,7 @@ function ensureRatioChartContainer() {
     <div id="ratio-chart" style="width:100%; height:${klineEl.style.height || '320px'};"></div>
   `;
 
-  compareCard.parentNode.insertBefore(newCard, compareCard);
+  klineCard.parentNode.insertBefore(newCard, klineCard);
 }
 
 function buildDateRangeQuickButtons() {
@@ -281,7 +280,6 @@ function buildTopFundSelectorBar() {
 
 
 
-
   
 function recalculateRatioChartForVisibleRange(logicalRange) {
   if (!currentAlignedDates || currentAlignedDates.length === 0) return;
@@ -359,6 +357,24 @@ function initCharts() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
 
+  // 第一圖：相對強弱比值指數（Base = 100）
+  ratioChart = LightweightCharts.createChart(document.getElementById('ratio-chart'), {
+    ...commonOptions,
+    localization: { priceFormatter: p => p.toFixed(1) }
+  });
+  ratioSeriesMap['ratio_00935'] = ratioChart.addLineSeries({ color: BENCH_COLORS['00935'], lineWidth: 2 });
+  ratioSeriesMap['ratio_2330'] = ratioChart.addLineSeries({ color: BENCH_COLORS['台積電(2330)'], lineWidth: 2 });
+  ratioSeriesMap['ratio_twii'] = ratioChart.addLineSeries({ color: BENCH_COLORS['加權指數'], lineWidth: 2 });
+  ratioSeriesMap['ratio_twii'].createPriceLine({
+    price: 100,
+    color: '#ffd54f',
+    lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true,
+    title: '100 基準'
+  });
+
+  // 第二圖：三檔基金淨值總覽（雙座標軸）
   klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), {
     ...commonOptions,
     rightPriceScale: { visible: true, borderColor: '#485c7b' },
@@ -395,22 +411,7 @@ function initCharts() {
     }
   });
 
-  ratioChart = LightweightCharts.createChart(document.getElementById('ratio-chart'), {
-    ...commonOptions,
-    localization: { priceFormatter: p => p.toFixed(1) }
-  });
-  ratioSeriesMap['ratio_00935'] = ratioChart.addLineSeries({ color: BENCH_COLORS['00935'], lineWidth: 2 });
-  ratioSeriesMap['ratio_2330'] = ratioChart.addLineSeries({ color: BENCH_COLORS['台積電(2330)'], lineWidth: 2 });
-  ratioSeriesMap['ratio_twii'] = ratioChart.addLineSeries({ color: BENCH_COLORS['加權指數'], lineWidth: 2 });
-  ratioSeriesMap['ratio_twii'].createPriceLine({
-    price: 100,
-    color: '#ffd54f',
-    lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
-    axisLabelVisible: true,
-    title: '100 基準'
-  });
-
+  // 第三圖：績效百分比比較
   compareChart = LightweightCharts.createChart(document.getElementById('compare-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(2) + '%' }
@@ -419,6 +420,7 @@ function initCharts() {
     lineSeriesMap[key] = compareChart.addLineSeries({ color, lineWidth: key === 'fund' ? 3 : 2 });
   }
 
+  // 第四圖：超額報酬價差
   spreadChart = LightweightCharts.createChart(document.getElementById('spread-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) + '%' }
@@ -444,7 +446,8 @@ function initCharts() {
 
 
 
-  const charts = [klineChart, ratioChart, compareChart, spreadChart];
+
+    const charts = [ratioChart, klineChart, compareChart, spreadChart];
   let isSyncingRange = false;
 
   charts.forEach((sourceChart, idx) => {
@@ -464,25 +467,21 @@ function initCharts() {
   const tooltip = document.createElement('div');
   tooltip.style.cssText = `
     position: fixed; display: none; pointer-events: none; z-index: 9999;
-    background: rgba(20, 24, 34, 0.95); color: #e0e3eb;
-    border: 1px solid #485c7b; border-radius: 6px; padding: 10px 14px;
-    font-size: 12.5px; line-height: 1.6; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
-    min-width: 245px;
+    background: rgba(18, 22, 31, 0.96); color: #e0e3eb;
+    border: 1px solid #485c7b; border-radius: 7px; padding: 10px 12px;
+    font-size: 12.5px; line-height: 1.5; box-shadow: 0 8px 22px rgba(0,0,0,0.55);
   `;
   document.body.appendChild(tooltip);
 
-  const fmtPctColor = (v) => {
-    if (v === null || v === undefined || Number.isNaN(v)) return '<span style="color:#787b86;">--</span>';
-    const color = v > 0 ? '#ef5350' : (v < 0 ? '#26a69a' : '#d1d4dc');
-    return `<b style="color:${color};">${v >= 0 ? '+' : ''}${v.toFixed(2)}%</b>`;
-  };
-
-  const fmtRatioVal = (v) => {
-    if (v === null || v === undefined || Number.isNaN(v)) return '<span style="color:#787b86;">--</span>';
-    const diff = v - 100;
-    const color = diff >= 0 ? '#ef5350' : '#26a69a';
-    return `<b>${v.toFixed(2)}</b> <span style="color:${color};">(${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%)</span>`;
-  };
+  const COL_KEYS = ['運籌', '優質', '樂活', '935'];
+  const PERIOD_ROWS = [
+    { key: 'd1', label: '單日' },
+    { key: 'd5', label: '5日' },
+    { key: 'd30', label: '30日' },
+    { key: 'd60', label: '60日' },
+    { key: 'd90', label: '90日' },
+    { key: 'd120', label: '120日' }
+  ];
 
   charts.forEach((sourceChart, sourceIdx) => {
     sourceChart.subscribeCrosshairMove(param => {
@@ -499,11 +498,11 @@ function initCharts() {
       const m = currentMetricsMap[dateStr];
       if (!m) return;
 
-      if (sourceIdx !== 0 && m.nav !== undefined && topFundSeriesMap[activeFund]) {
-        klineChart.setCrosshairPosition(m.nav, dateStr, topFundSeriesMap[activeFund]);
-      }
-      if (sourceIdx !== 1 && m.ratioC !== undefined) {
+      if (sourceIdx !== 0 && m.ratioC !== undefined) {
         ratioChart.setCrosshairPosition(m.ratioC, dateStr, ratioSeriesMap['ratio_twii']);
+      }
+      if (sourceIdx !== 1 && m.nav !== undefined && topFundSeriesMap[activeFund]) {
+        klineChart.setCrosshairPosition(m.nav, dateStr, topFundSeriesMap[activeFund]);
       }
       if (sourceIdx !== 2 && m.cumPct !== undefined) {
         compareChart.setCrosshairPosition(m.cumPct, dateStr, lineSeriesMap['fund']);
@@ -512,39 +511,77 @@ function initCharts() {
         spreadChart.setCrosshairPosition(m.spreadTwii, dateStr, spreadSeriesMap['diff_twii']);
       }
 
-      let navRowsHtml = '';
-      for (const [fName, cfg] of Object.entries(TOP_FUND_CONFIG)) {
-        const v = m.allNavs?.[fName];
-        const isCur = fName === activeFund;
-        navRowsHtml += `<div style="${isCur ? 'background:rgba(255,255,255,0.08); padding:0 4px; border-radius:3px;' : ''}">
-          <span style="color:${cfg.color};">●</span> ${fName}：<b>${v !== undefined ? v.toFixed(2) : '--'}</b>
-        </div>`;
-      }
+      const comp = m.comp || {};
+
+      // 產生當日價格列
+      const priceCells = COL_KEYS.map(k => {
+        const p = comp[k]?.price;
+        return `<td style="padding:3px 7px; text-align:right; color:#b2b5be; font-size:11.5px; border-bottom:1px solid #363a45;">
+          ${p !== undefined ? p.toFixed(2) : '--'}
+        </td>`;
+      }).join('');
+
+      // 產生 單日、5日、30日、60日、90日、120日 各列，並以黃框標示該列第一名
+      const periodRowsHtml = PERIOD_ROWS.map(row => {
+        let maxVal = -Infinity;
+        COL_KEYS.forEach(k => {
+          const val = comp[k]?.[row.key];
+          if (val !== null && val !== undefined && !Number.isNaN(val) && val > maxVal) {
+            maxVal = val;
+          }
+        });
+
+        const cells = COL_KEYS.map(k => {
+          const val = comp[k]?.[row.key];
+          if (val === null || val === undefined || Number.isNaN(val)) {
+            return `<td style="padding:4px 7px; text-align:right; color:#787b86;">--</td>`;
+          }
+          const isFirst = (maxVal > -Infinity) && (Math.abs(val - maxVal) < 1e-6);
+          const textColor = val > 0 ? '#ef5350' : (val < 0 ? '#26a69a' : '#d1d4dc');
+          const boxStyle = isFirst
+            ? 'border:1.5px solid #ffd54f; border-radius:4px; padding:1px 5px; background:rgba(255,213,79,0.14); display:inline-block;'
+            : 'padding:1px 5px; display:inline-block;';
+
+          return `<td style="padding:3px 5px; text-align:right;">
+            <span style="${boxStyle} color:${textColor}; font-weight:bold;">
+              ${val >= 0 ? '+' : ''}${val.toFixed(2)}%
+            </span>
+          </td>`;
+        }).join('');
+
+        return `<tr>
+          <td style="padding:3px 8px 3px 2px; color:#d1d4dc; font-weight:bold; white-space:nowrap;">${row.label}</td>
+          ${cells}
+        </tr>`;
+      }).join('');
 
       let html = `
-        <div style="font-weight:bold; font-size:13.5px; color:#fff; border-bottom:1px solid #363a45; padding-bottom:4px; margin-bottom:5px;">
-          📅 ${dateStr}
+        <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #363a45; padding-bottom:5px; margin-bottom:6px;">
+          <span style="font-weight:bold; font-size:13.5px; color:#fff;">📅 ${dateStr}</span>
+          <span style="font-size:11px; color:#ffd54f; border:1px solid #ffd54f; border-radius:3px; padding:0 5px;">黃框 = 第一名</span>
         </div>
-        <div style="margin-bottom:5px;">
-          <div style="color:#9598a1; font-size:11px;">【三檔基金淨值】</div>
-          ${navRowsHtml}
-        </div>
-        <div style="border-top:1px solid #363a45; padding-top:4px; margin-bottom:5px;">
-          <div style="color:#9598a1; font-size:11px;">【${activeFund} 相對強弱比值 (基準=100)】</div>
-          <div><span style="color:#00bcd4;">●</span> 線 A (÷ 00935)：${fmtRatioVal(m.ratioA)}</div>
-          <div><span style="color:#e91e63;">●</span> 線 B (÷ 台積電)：${fmtRatioVal(m.ratioB)}</div>
-          <div><span style="color:#2962ff;">●</span> 線 C (÷ 大盤)：${fmtRatioVal(m.ratioC)}</div>
-        </div>
-        <div style="border-top:1px solid #363a45; padding-top:4px;">
-          <div style="color:#9598a1; font-size:11px;">【${activeFund} 區間漲跌幅】</div>
-          <div>(1) 單日：${fmtPctColor(m.d1)} ｜ (2) 5日：${fmtPctColor(m.d5)}</div>
-          <div>(3) 30日：${fmtPctColor(m.d30)} ｜ (4) 60日：${fmtPctColor(m.d60)}</div>
-          <div>(5) 90日：${fmtPctColor(m.d90)}</div>
-        </div>
+        <table style="border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums;">
+          <thead>
+            <tr style="border-bottom:1px solid #363a45;">
+              <th style="padding:3px 8px 3px 2px; text-align:left; color:#9598a1; font-weight:normal;">週期</th>
+              <th style="padding:3px 7px; text-align:right; color:#ff9800;">運籌</th>
+              <th style="padding:3px 7px; text-align:right; color:#ffd54f;">優質</th>
+              <th style="padding:3px 7px; text-align:right; color:#ec407a;">樂活</th>
+              <th style="padding:3px 7px; text-align:right; color:#00bcd4;">935</th>
+            </tr>
+            <tr>
+              <td style="padding:3px 8px 3px 2px; color:#9598a1; font-size:11.5px; border-bottom:1px solid #363a45;">淨值/價</td>
+              ${priceCells}
+            </tr>
+          </thead>
+          <tbody>
+            ${periodRowsHtml}
+          </tbody>
+        </table>
       `;
 
       if (m.patternTag) {
-        html += `<div style="margin-top:5px; padding-top:4px; border-top:1px dashed #485c7b; font-size:11.5px;">${m.patternTag}</div>`;
+        html += `<div style="margin-top:6px; padding-top:5px; border-top:1px dashed #485c7b; font-size:11.5px;">${m.patternTag}</div>`;
       }
 
       tooltip.innerHTML = html;
@@ -552,8 +589,8 @@ function initCharts() {
 
       const mouseX = param.sourceEvent ? param.sourceEvent.clientX : 0;
       const mouseY = param.sourceEvent ? param.sourceEvent.clientY : 0;
-      const boxW = 270;
-      const boxH = tooltip.offsetHeight || 340;
+      const boxW = tooltip.offsetWidth || 355;
+      const boxH = tooltip.offsetHeight || 265;
       const leftPos = (mouseX + boxW + 20 > window.innerWidth) ? (mouseX - boxW - 15) : (mouseX + 16);
       const topPos = (mouseY + boxH + 20 > window.innerHeight) ? Math.max(10, window.innerHeight - boxH - 15) : (mouseY + 16);
       tooltip.style.left = leftPos + 'px';
@@ -703,6 +740,34 @@ function toAlignedPctSeries(targetDict, alignedDates) {
   });
 }
 
+// 預先為「運籌、優質、樂活、935」計算每一天的 單日、5日、30日、60日、90日、120日 漲跌幅
+function buildMultiAssetReturnLookup(dictObj) {
+  const sortedEntries = Object.entries(dictObj || {}).sort((a, b) => a.at(0).localeCompare(b.at(0)));
+  const lookup = {};
+  const offsets = [
+    { key: 'd1', n: 1 },
+    { key: 'd5', n: 5 },
+    { key: 'd30', n: 30 },
+    { key: 'd60', n: 60 },
+    { key: 'd90', n: 90 },
+    { key: 'd120', n: 120 }
+  ];
+
+  sortedEntries.forEach(([dateStr, currVal], idx) => {
+    const item = { price: currVal };
+    offsets.forEach(({ key, n }) => {
+      if (idx - n >= 0) {
+        const prevVal = sortedEntries.at(idx - n).at(1);
+        item[key] = prevVal > 0 ? ((currVal - prevVal) / prevVal) * 100 : null;
+      } else {
+        item[key] = null;
+      }
+    });
+    lookup[dateStr] = item;
+  });
+  return lookup;
+}
+
 function renderAll() {
   if (!rawData) return;
   const start = document.getElementById('startDate').value;
@@ -731,7 +796,6 @@ function renderAll() {
 
   const activeDict = rawData.funds[activeFund] || {};
   const allSortedActive = Object.entries(activeDict).sort((a, b) => a.at(0).localeCompare(b.at(0)));
-  const fullIndexMap = Object.fromEntries(allSortedActive.map(([d], idx) => [d, idx]));
   const filteredActiveEntries = allSortedActive.filter(([d]) => d >= start && d <= end);
 
   const activeScaleId = TOP_FUND_CONFIG[activeFund].priceScaleId;
@@ -742,6 +806,14 @@ function renderAll() {
   const dict00935 = rawData.benchmarks['00935'] || {};
   const dict2330 = rawData.benchmarks['台積電(2330)'] || {};
   const dictTwii = rawData.benchmarks['加權指數'] || {};
+
+  // 建立 運籌、優質、樂活、935 四者各自的 6 週期漲跌幅對照表
+  const compLookups = {
+    '運籌': buildMultiAssetReturnLookup(rawData.funds['野村台灣運籌']),
+    '優質': buildMultiAssetReturnLookup(rawData.funds['野村優質(累積)']),
+    '樂活': buildMultiAssetReturnLookup(rawData.funds['施羅德台灣樂活A']),
+    '935': buildMultiAssetReturnLookup(dict00935)
+  };
 
   currentRawRatioMaps = { ratio_00935: {}, ratio_2330: {}, ratio_twii: {} };
   for (const d of alignedDates) {
@@ -754,27 +826,15 @@ function renderAll() {
   }
 
   currentMetricsMap = {};
-  const calcRet = (fullIdx, offset) => {
-    if (fullIdx === undefined || fullIdx - offset < 0) return null;
-    const prev = allSortedActive.at(fullIdx - offset).at(1);
-    const curr = allSortedActive.at(fullIdx).at(1);
-    return ((curr - prev) / prev) * 100;
-  };
-
   alignedDates.forEach((d, i) => {
-    const fIdx = fullIndexMap[d];
-    const allNavs = {};
-    for (const fName of Object.keys(TOP_FUND_CONFIG)) {
-      allNavs[fName] = rawData.funds[fName]?.[d];
-    }
     currentMetricsMap[d] = {
       nav: activeDict[d],
-      allNavs,
-      d1: calcRet(fIdx, 1),
-      d5: calcRet(fIdx, 5),
-      d30: calcRet(fIdx, 30),
-      d60: calcRet(fIdx, 60),
-      d90: calcRet(fIdx, 90),
+      comp: {
+        '運籌': compLookups['運籌'][d],
+        '優質': compLookups['優質'][d],
+        '樂活': compLookups['樂活'][d],
+        '935': compLookups['935'][d]
+      },
       cumPct: fundPctList.at(i)?.value,
       spreadTwii: undefined,
       ratioA: undefined,
@@ -818,8 +878,8 @@ function renderAll() {
     if (currentMetricsMap[p.time]) currentMetricsMap[p.time].spreadTwii = p.value;
   });
 
-  klineChart.timeScale().fitContent();
   ratioChart.timeScale().fitContent();
+  klineChart.timeScale().fitContent();
   compareChart.timeScale().fitContent();
   spreadChart.timeScale().fitContent();
 }
