@@ -1,89 +1,129 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>主動型基金與大盤/台積電/00935超額報酬對比</title>
-  <script src="./lightweight-charts.js?v=4.1.3-npm04"></script>
-
+  <title>台灣主動式基金 vs 大盤／台積電／00935 相對強弱分析</title>
+  <script src="https://unpkg.com"></script>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #131722; color: #d1d4dc; margin: 0; padding: 16px; }
-    .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; background: #1e222d; padding: 12px 16px; border-radius: 8px; margin-bottom: 12px; }
-    select, input, button { background: #2a2e39; color: #d1d4dc; border: 1px solid #363a45; padding: 6px 10px; border-radius: 4px; font-size: 14px; }
-    button { background: #2962ff; border: none; color: white; cursor: pointer; font-weight: bold; }
-    button:hover { background: #1e53e5; }
-    .chart-title { font-size: 15px; font-weight: bold; margin: 12px 0 6px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-    .chart-box { width: 100%; border-radius: 8px; overflow: hidden; background: #1e222d; }
-    #kline-chart { height: 340px; }
-    #compare-chart { height: 300px; }
-    #spread-chart { height: 300px; }
-    .legend { font-size: 13px; display: flex; gap: 14px; flex-wrap: wrap; }
-    .note { font-size: 12px; color: #787b86; }
-    #statusBanner { display: none; background: #3b2322; color: #ff8a80; border: 1px solid #ef5350; padding: 12px 16px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px 20px;
+      background-color: #131722;
+      color: #d1d4dc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", sans-serif;
+    }
+    .header-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      padding: 10px 14px;
+      background: #1e222d;
+      border: 1px solid #2b2b43;
+      border-radius: 8px;
+    }
+    .note {
+      font-size: 12px;
+      color: #848e9c;
+    }
+    #statusBanner {
+      display: none;
+      padding: 12px 16px;
+      margin-bottom: 14px;
+      background: rgba(239, 83, 80, 0.15);
+      border: 1px solid #ef5350;
+      border-radius: 6px;
+      color: #ff8a80;
+      font-size: 13.5px;
+    }
+    .chart-card {
+      background: #1e222d;
+      border: 1px solid #2b2b43;
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 16px;
+    }
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .chart-title {
+      font-weight: bold;
+      font-size: 15px;
+      color: #ffffff;
+    }
+    .legend-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      font-size: 12.5px;
+    }
+    .chart-box {
+      width: 100%;
+      height: 310px;
+      position: relative;
+    }
   </style>
 </head>
 <body>
 
-<div id="statusBanner"></div>
+  <div id="statusBanner"></div>
 
-<div class="toolbar">
-<!--
-  <label>選擇基金：
-    <select id="fundSelect">
-      <option value="野村台灣運籌">野村台灣運籌</option>
-      <option value="野村優質(累積)">野村優質(累積)</option>
-      <option value="施羅德台灣樂活A">施羅德台灣樂活A</option>
-    </select>
-  </label>
-
-  <label>K線週期：
-    <select id="timeframeSelect">
-      <option value="D">日 K（開=昨收 / 收=今收）</option>
-      <option value="W">週 K（週一開 / 週五收）</option>
-      <option value="M">月 K（月初開 / 月底收）</option>
-    </select>
-  </label>
-
-  <label>起始日：<input type="date" id="startDate" value="2020-01-01" min="2010-01-01" /></label>
-  <label>結束日：<input type="date" id="endDate" /></label>
-  <button onclick="renderAll()">套用區間與週期</button>
-  <span id="updateTime" class="note" style="margin-left:auto;"></span>
-  -->
-  <div id="topControlBar" style="display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-bottom:14px;">
+  <div class="header-bar">
     <div id="topFundBar" style="display:inline-flex; flex-wrap:wrap; gap:8px;"></div>
     <div style="width:1px; height:20px; background:#485c7b; margin:0 2px;"></div>
     <div id="dateQuickBar" style="display:inline-flex; flex-wrap:wrap; gap:6px;"></div>
-    <span id="updateTime" class="note" style="margin-left:auto;"></span>
-  </div>  
-</div>
-
-<div class="chart-title">
-  <span id="klineTitle">基金淨值 K 線圖</span>
-  <span class="note">紅漲綠跌（台股慣例）｜三張圖表時間軸與十字游標完全同步聯動</span>
-</div>
-<div id="kline-chart" class="chart-box"></div>
-
-  
-<div class="chart-title">
-  <span>超額報酬差值（Alpha Spread %）— 數值大於 0% 代表基金跑贏對照標的</span>
-  <div class="legend">
-    <span style="color:#2962ff;">● 基金漲跌幅 − 大盤漲跌幅</span>
-    <span style="color:#e91e63;">● 基金漲跌幅 − 台積電漲跌幅</span>
-    <span style="color:#00bcd4;">● 基金漲跌幅 − 00935漲跌幅</span>
+    <span id="updateTime" class="note" style="margin-left:auto;">載入中...</span>
   </div>
-</div>
-<div id="spread-chart" class="chart-box"></div>
-    
-<div class="chart-title">
-  <span>區間累計漲跌幅（%）對比 — 以設定「起始日」為 0% 基準</span>
-  <div class="legend">
-    <span style="color:#ff9800;">● 選定基金</span>
-    <span style="color:#2962ff;">● 加權指數</span>
-    <span style="color:#e91e63;">● 台積電(2330)</span>
-    <span style="color:#00bcd4;">● 00935</span>
+
+  <!-- 第一圖：相對強弱比值指數（Base = 100，放大自動重算基準日） -->
+  <div class="chart-card">
+    <div class="chart-header">
+      <div id="ratioTitle" class="chart-title">相對強弱比值指數（基準日 = 100，放大圖表自動以畫面起點重算）</div>
+      <div class="legend-group">
+        <span style="color:#00bcd4;">● 線 A（基金 ÷ 00935）</span>
+        <span style="color:#e91e63;">● 線 B（基金 ÷ 台積電）</span>
+        <span style="color:#2962ff;">● 線 C（基金 ÷ 加權指數）</span>
+        <span id="ratioBaseBadge" style="color:#ffd54f; font-weight:bold;">[基準日：--]</span>
+      </div>
+    </div>
+    <div id="ratio-chart" class="chart-box"></div>
   </div>
-</div>
-<div id="compare-chart" class="chart-box"></div>
+
+  <!-- 第二圖：三檔基金淨值總覽（雙座標軸 + 左上角淨值標示框 + 綠白型態粗線） -->
+  <div class="chart-card">
+    <div class="chart-header">
+      <div id="klineTitle" class="chart-title">三檔基金淨值總覽</div>
+      <div class="legend-group">
+        <span style="color:#00e676;">━ 波段下跌 ≥ 5%</span>
+        <span style="color:#ffffff;">━ 連漲後單日急跌 ≥ 5%</span>
+      </div>
+    </div>
+    <div id="kline-chart" class="chart-box">
+      <div id="leftFundLegendOverlay" style="position:absolute; top:8px; left:68px; z-index:20; display:flex; flex-direction:column; gap:4px; pointer-events:none;"></div>
+    </div>
+  </div>
+
+  <!-- 第三圖：超額報酬價差圖 -->
+  <div class="chart-card">
+    <div class="chart-header">
+      <div class="chart-title">累積超額報酬價差（基金累積漲跌幅 − 基準累積漲跌幅）</div>
+      <div class="legend-group">
+        <span style="color:#2962ff;">● 基金漲跌幅 - 大盤漲跌幅</span>
+        <span style="color:#e91e63;">● 基金漲跌幅 - 台積電漲跌幅</span>
+        <span style="color:#00bcd4;">● 基金漲跌幅 - 00935漲跌幅</span>
+      </div>
+    </div>
+    <div id="spread-chart" class="chart-box"></div>
+  </div>
+
 
 
 
@@ -91,9 +131,9 @@
 let rawData = null;
 let activeFund = '野村優質(累積)';
 
-let klineChart, ratioChart, spreadChart;
-let topFundSeriesMap = {};
+let ratioChart, klineChart, spreadChart;
 let ratioSeriesMap = {};
+let topFundSeriesMap = {};
 let spreadSeriesMap = {};
 let patternSeriesList = [];
 
@@ -130,52 +170,6 @@ function showError(msg) {
   if (banner) {
     banner.style.display = 'block';
     banner.innerHTML = msg;
-  }
-}
-
-function setupChartContainers() {
-  const klineEl = document.getElementById('kline-chart');
-  const compareEl = document.getElementById('compare-chart');
-
-  // 1. 自動隱藏原本的「績效百分比比較圖（第三圖）」
-  if (compareEl && compareEl.parentElement) {
-    compareEl.parentElement.style.display = 'none';
-  }
-
-  // 2. 在最上方建立「相對強弱比值指數圖（第一圖）」
-  if (!document.getElementById('ratio-chart') && klineEl) {
-    const klineCard = klineEl.parentElement;
-    const newCard = klineCard.cloneNode(false);
-    newCard.style.marginBottom = '16px';
-
-    newCard.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-        <div id="ratioTitle" style="font-weight:bold; font-size:15px; color:#fff;">
-          相對強弱比值指數（基準日 = 100，放大圖表自動以畫面起點重算）
-        </div>
-        <div style="font-size:12.5px; display:flex; gap:14px; flex-wrap:wrap;">
-          <span style="color:#00bcd4;">● 線 A（基金 ÷ 00935）</span>
-          <span style="color:#e91e63;">● 線 B（基金 ÷ 台積電）</span>
-          <span style="color:#2962ff;">● 線 C（基金 ÷ 加權指數）</span>
-          <span id="ratioBaseBadge" style="color:#ffd54f; font-weight:bold;">[基準日：--]</span>
-        </div>
-      </div>
-      <div id="ratio-chart" style="width:100%; height:${klineEl.style.height || '320px'};"></div>
-    `;
-    klineCard.parentNode.insertBefore(newCard, klineCard);
-  }
-
-  // 3. 在第二圖（三檔基金淨值總覽）的最左側建立固定標示框，取代右側擋住線條的文字標籤
-  if (klineEl && !document.getElementById('leftFundLegendOverlay')) {
-    klineEl.style.position = 'relative';
-    const overlay = document.createElement('div');
-    overlay.id = 'leftFundLegendOverlay';
-    overlay.style.cssText = `
-      position: absolute; top: 8px; left: 68px; z-index: 20;
-      display: flex; flex-direction: column; gap: 4px;
-      pointer-events: none;
-    `;
-    klineEl.appendChild(overlay);
   }
 }
 
@@ -307,6 +301,7 @@ function selectActiveFund(fundName) {
 
 
 
+
   
 function recalculateRatioChartForVisibleRange(logicalRange) {
   if (!currentAlignedDates || currentAlignedDates.length === 0) return;
@@ -367,14 +362,7 @@ function recalculateRatioChartForVisibleRange(logicalRange) {
 }
 
 function initCharts() {
-  setupChartContainers();
   buildCombinedControlBar();
-
-  document.querySelectorAll('span').forEach(el => {
-    if (el.innerText.includes('基金漲跌幅 - 大盤漲跌幅')) el.style.color = '#2962ff';
-    if (el.innerText.includes('基金漲跌幅 - 台積電漲跌幅')) el.style.color = '#e91e63';
-    if (el.innerText.includes('基金漲跌幅 - 00935漲跌幅')) el.style.color = '#00bcd4';
-  });
 
   const commonOptions = {
     layout: { background: { color: '#1e222d' }, textColor: '#d1d4dc' },
@@ -389,7 +377,6 @@ function initCharts() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
 
-  // 第一圖：相對強弱比值指數（Base = 100）
   ratioChart = LightweightCharts.createChart(document.getElementById('ratio-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(1) }
@@ -406,7 +393,6 @@ function initCharts() {
     title: ''
   });
 
-  // 第二圖：三檔基金淨值總覽（title 設為空字串，不再把名稱框壓在右側走勢線上，改在最左上角顯示）
   klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), {
     ...commonOptions,
     rightPriceScale: { visible: true, borderColor: '#485c7b' },
@@ -443,7 +429,6 @@ function initCharts() {
     }
   });
 
-  // 第三圖（原第四圖）：超額報酬價差圖
   spreadChart = LightweightCharts.createChart(document.getElementById('spread-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) + '%' }
@@ -464,6 +449,7 @@ function initCharts() {
     axisLabelVisible: true,
     title: ''
   });
+
 
 
 
@@ -632,10 +618,15 @@ function initCharts() {
       tooltip.style.top = topPos + 'px';
     });
   });
+
+  window.addEventListener('resize', () => {
+    [ratioChart, klineChart, spreadChart].forEach(c => {
+      if (c && c.chartElement()) {
+        c.applyOptions({ width: c.chartElement().parentElement.clientWidth });
+      }
+    });
+  });
 }
-
-
-
 
 
 
@@ -942,9 +933,6 @@ async function boot() {
 
 boot();
 </script>
-
-
-  
-  
 </body>
 </html>
+
