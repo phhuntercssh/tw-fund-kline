@@ -5,13 +5,25 @@ import time
 import datetime
 import requests
 import yfinance as yf
-import urllib.request
+import requests
 
 if not os.path.exists("lightweight-charts.standalone.production.js"):
-    urllib.request.urlretrieve(
-        "https://jsdelivr.net",
-        "lightweight-charts.standalone.production.js"
-    )
+    cdn_urls = [
+        "https://cloudflare.com",
+        "https://unpkg.com",
+        "https://jsdelivr.net"
+    ]
+    for u in cdn_urls:
+        try:
+            r = requests.get(u, timeout=15)
+            if r.status_code == 200 and len(r.text) > 50000:
+                with open("lightweight-charts.standalone.production.js", "w", encoding="utf-8") as f:
+                    f.write(r.text)
+                print(f"成功從 {u} 下載圖表引擎！")
+                break
+        except Exception as e:
+            print(f"嘗試下載 {u} 失敗: {e}")
+
 
 FUNDS = {
     "野村台灣運籌": {
