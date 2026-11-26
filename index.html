@@ -122,7 +122,6 @@ const formatDateLocal = (d) => {
   return `${y}-${m}-${day}`;
 };
 
-// 預設起訖日期為「近 1 年」
 const nowDateObj = new Date();
 let currentEndDate = formatDateLocal(nowDateObj);
 let currentStartDate = formatDateLocal(new Date(nowDateObj.getFullYear() - 1, nowDateObj.getMonth(), nowDateObj.getDate()));
@@ -167,7 +166,6 @@ function buildCombinedControlBar() {
   const dateBar = document.getElementById('dateQuickBar');
   if (!fundBar || !dateBar) return;
 
-  // 1. 建立三檔基金切換按鈕
   fundBar.innerHTML = '';
   for (const [fName, cfg] of Object.entries(TOP_FUND_CONFIG)) {
     const btn = document.createElement('button');
@@ -183,7 +181,6 @@ function buildCombinedControlBar() {
     fundBar.appendChild(btn);
   }
 
-  // 2. 建立【近30天】【近3個月】【近1年】【近3年】【全部】按鈕
   dateBar.innerHTML = '';
   const presets = [
     { id: '30D', label: '近30天', days: 30 },
@@ -335,10 +332,17 @@ function initCharts() {
     if (el.innerText.includes('基金漲跌幅 - 00935漲跌幅')) el.style.color = '#00bcd4';
   });
 
+  // 關鍵設定：fixRightEdge: true 鎖定右邊界不脫離最新日期，rightOffset: 0 貼齊右側邊緣數字
   const commonOptions = {
     layout: { background: { color: '#1e222d' }, textColor: '#d1d4dc' },
     grid: { vertLines: { color: '#2b2b43' }, horzLines: { color: '#2b2b43' } },
-    timeScale: { timeVisible: false, borderColor: '#485c7b', rightOffset: 5 },
+    timeScale: {
+      timeVisible: false,
+      borderColor: '#485c7b',
+      rightOffset: 0,
+      fixRightEdge: true,
+      fixLeftEdge: true
+    },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
 
@@ -429,19 +433,28 @@ function initCharts() {
 
 
 
-   const charts = [ratioChart, klineChart, compareChart, spreadChart];
+
+  const charts = [ratioChart, klineChart, compareChart, spreadChart];
   let isSyncingRange = false;
 
   charts.forEach((sourceChart, idx) => {
     sourceChart.timeScale().subscribeVisibleLogicalRangeChange(logicalRange => {
-      if (isSyncingRange || !logicalRange) return;
+      if (isSyncingRange || !logicalRange || currentAlignedDates.length === 0) return;
       isSyncingRange = true;
-      charts.forEach((targetChart, targetIdx) => {
-        if (idx !== targetIdx) {
-          targetChart.timeScale().setVisibleLogicalRange(logicalRange);
-        }
+
+      // 強制將右邊界釘住最後一根交易日（不脫離最邊緣數字），僅讓左邊界隨滾輪縮放推進
+      const lastIdx = currentAlignedDates.length - 1;
+      const span = Math.max(5, logicalRange.to - logicalRange.from);
+      const clampedRange = {
+        from: Math.max(0, lastIdx - span),
+        to: lastIdx
+      };
+
+      charts.forEach((targetChart) => {
+        targetChart.timeScale().setVisibleLogicalRange(clampedRange);
       });
-      recalculateRatioChartForVisibleRange(logicalRange);
+
+      recalculateRatioChartForVisibleRange(clampedRange);
       isSyncingRange = false;
     });
   });
@@ -578,6 +591,7 @@ function initCharts() {
     });
   });
 }
+
 
 
 
