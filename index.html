@@ -49,6 +49,12 @@
   <button onclick="renderAll()">套用區間與週期</button>
   <span id="updateTime" class="note" style="margin-left:auto;"></span>
   -->
+  <div id="topControlBar" style="display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-bottom:14px;">
+    <div id="topFundBar" style="display:inline-flex; flex-wrap:wrap; gap:8px;"></div>
+    <div style="width:1px; height:20px; background:#485c7b; margin:0 2px;"></div>
+    <div id="dateQuickBar" style="display:inline-flex; flex-wrap:wrap; gap:6px;"></div>
+    <span id="updateTime" class="note" style="margin-left:auto;"></span>
+  </div>  
 </div>
 
 <div class="chart-title">
@@ -109,7 +115,6 @@ const BENCH_COLORS = {
   '00935': '#00bcd4'
 };
 
-const nowDateObj = new Date();
 const formatDateLocal = (d) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -117,18 +122,10 @@ const formatDateLocal = (d) => {
   return `${y}-${m}-${day}`;
 };
 
-const endInput = document.getElementById('endDate');
-const startInput = document.getElementById('startDate');
-if (endInput && startInput) {
-  endInput.value = formatDateLocal(nowDateObj);
-  startInput.value = formatDateLocal(new Date(nowDateObj.getFullYear() - 1, nowDateObj.getMonth(), nowDateObj.getDate()));
-}
-
-const fundSelectEl = document.getElementById('fundSelect');
-if (fundSelectEl) {
-  fundSelectEl.value = activeFund;
-  fundSelectEl.addEventListener('change', (e) => selectActiveFund(e.target.value));
-}
+// 預設起訖日期為「近 1 年」
+const nowDateObj = new Date();
+let currentEndDate = formatDateLocal(nowDateObj);
+let currentStartDate = formatDateLocal(new Date(nowDateObj.getFullYear() - 1, nowDateObj.getMonth(), nowDateObj.getDate()));
 
 function showError(msg) {
   const banner = document.getElementById('statusBanner');
@@ -138,7 +135,6 @@ function showError(msg) {
   }
 }
 
-// 將「相對強弱比值指數圖」插入到最上方（三檔基金淨值總覽的上面），成為第一圖
 function ensureRatioChartContainer() {
   if (document.getElementById('ratio-chart')) return;
   const klineEl = document.getElementById('kline-chart');
@@ -166,22 +162,39 @@ function ensureRatioChartContainer() {
   klineCard.parentNode.insertBefore(newCard, klineCard);
 }
 
-function buildDateRangeQuickButtons() {
-  if (!endInput || document.getElementById('dateQuickBar')) return;
+function buildCombinedControlBar() {
+  const fundBar = document.getElementById('topFundBar');
+  const dateBar = document.getElementById('dateQuickBar');
+  if (!fundBar || !dateBar) return;
 
-  const bar = document.createElement('div');
-  bar.id = 'dateQuickBar';
-  bar.style.cssText = 'display:inline-flex; gap:6px; margin-left:10px; vertical-align:middle;';
+  // 1. 建立三檔基金切換按鈕
+  fundBar.innerHTML = '';
+  for (const [fName, cfg] of Object.entries(TOP_FUND_CONFIG)) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'top-fund-pill';
+    btn.dataset.fund = fName;
+    btn.innerText = `● ${cfg.label}`;
+    btn.style.cssText = `
+      border: 1px solid ${cfg.color}; border-radius: 14px; padding: 4px 12px;
+      font-size: 12.5px; cursor: pointer; transition: all 0.15s ease;
+    `;
+    btn.onclick = () => selectActiveFund(fName);
+    fundBar.appendChild(btn);
+  }
 
+  // 2. 建立【近30天】【近3個月】【近1年】【近3年】【全部】按鈕
+  dateBar.innerHTML = '';
   const presets = [
-    { id: '3M', label: '近 3 個月', months: 3 },
-    { id: '1Y', label: '近 1 年', months: 12 },
-    { id: '3Y', label: '近 3 年', months: 36 },
+    { id: '30D', label: '近30天', days: 30 },
+    { id: '3M', label: '近3個月', months: 3 },
+    { id: '1Y', label: '近1年', months: 12 },
+    { id: '3Y', label: '近3年', months: 36 },
     { id: 'ALL', label: '全部', months: null }
   ];
 
-  const updateBtnStyle = (activeId) => {
-    bar.querySelectorAll('button').forEach(b => {
+  const updateDateBtnStyle = (activeId) => {
+    dateBar.querySelectorAll('button').forEach(b => {
       const isSelected = b.dataset.preset === activeId;
       b.style.background = isSelected ? '#2962ff' : '#2a2e39';
       b.style.color = isSelected ? '#ffffff' : '#d1d4dc';
@@ -201,9 +214,12 @@ function buildDateRangeQuickButtons() {
     `;
     btn.onclick = () => {
       const now = new Date();
-      endInput.value = formatDateLocal(now);
+      currentEndDate = formatDateLocal(now);
 
-      if (p.months === null) {
+      if (p.days) {
+        const target = new Date(now.getFullYear(), now.getMonth(), now.getDate() - p.days);
+        currentStartDate = formatDateLocal(target);
+      } else if (p.months === null) {
         let minDate = '2010-01-04';
         if (rawData && rawData.funds) {
           const allFirstDates = Object.values(rawData.funds)
@@ -211,30 +227,24 @@ function buildDateRangeQuickButtons() {
             .filter(Boolean);
           if (allFirstDates.length > 0) minDate = allFirstDates.sort().at(0);
         }
-        startInput.value = minDate;
+        currentStartDate = minDate;
       } else {
         const target = new Date(now.getFullYear(), now.getMonth() - p.months, now.getDate());
-        startInput.value = formatDateLocal(target);
+        currentStartDate = formatDateLocal(target);
       }
 
-      updateBtnStyle(p.id);
+      updateDateBtnStyle(p.id);
       renderAll();
     };
-    bar.appendChild(btn);
+    dateBar.appendChild(btn);
   });
 
-  endInput.parentNode.insertBefore(bar, endInput.nextSibling);
-  updateBtnStyle('1Y');
-
-  [startInput, endInput].forEach(inp => {
-    inp.addEventListener('change', () => updateBtnStyle(''));
-  });
+  updateDateBtnStyle('1Y');
 }
 
 function selectActiveFund(fundName) {
   if (!TOP_FUND_CONFIG[fundName]) return;
   activeFund = fundName;
-  if (fundSelectEl) fundSelectEl.value = fundName;
 
   document.querySelectorAll('.top-fund-pill').forEach(btn => {
     const isSelected = btn.dataset.fund === fundName;
@@ -252,29 +262,6 @@ function selectActiveFund(fundName) {
   renderAll();
 }
 
-function buildTopFundSelectorBar() {
-  const titleEl = document.getElementById('klineTitle');
-  if (!titleEl || document.getElementById('topFundBar')) return;
-
-  const bar = document.createElement('div');
-  bar.id = 'topFundBar';
-  bar.style.cssText = 'display:inline-flex; flex-wrap:wrap; gap:8px; margin-left:12px; vertical-align:middle;';
-
-  for (const [fName, cfg] of Object.entries(TOP_FUND_CONFIG)) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'top-fund-pill';
-    btn.dataset.fund = fName;
-    btn.innerText = `● ${cfg.label}`;
-    btn.style.cssText = `
-      border: 1px solid ${cfg.color}; border-radius: 14px; padding: 3px 11px;
-      font-size: 12.5px; cursor: pointer; transition: all 0.15s ease;
-    `;
-    btn.onclick = () => selectActiveFund(fName);
-    bar.appendChild(btn);
-  }
-  titleEl.parentNode.insertBefore(bar, titleEl.nextSibling);
-}
 
 
 
@@ -340,8 +327,7 @@ function recalculateRatioChartForVisibleRange(logicalRange) {
 
 function initCharts() {
   ensureRatioChartContainer();
-  buildDateRangeQuickButtons();
-  buildTopFundSelectorBar();
+  buildCombinedControlBar();
 
   document.querySelectorAll('span').forEach(el => {
     if (el.innerText.includes('基金漲跌幅 - 大盤漲跌幅')) el.style.color = '#2962ff';
@@ -356,7 +342,6 @@ function initCharts() {
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
 
-  // 第一圖：相對強弱比值指數（Base = 100）
   ratioChart = LightweightCharts.createChart(document.getElementById('ratio-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(1) }
@@ -373,7 +358,6 @@ function initCharts() {
     title: '100 基準'
   });
 
-  // 第二圖：三檔基金淨值總覽（雙座標軸）
   klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), {
     ...commonOptions,
     rightPriceScale: { visible: true, borderColor: '#485c7b' },
@@ -410,7 +394,6 @@ function initCharts() {
     }
   });
 
-  // 第三圖：績效百分比比較
   compareChart = LightweightCharts.createChart(document.getElementById('compare-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(2) + '%' }
@@ -419,7 +402,6 @@ function initCharts() {
     lineSeriesMap[key] = compareChart.addLineSeries({ color, lineWidth: key === 'fund' ? 3 : 2 });
   }
 
-  // 第四圖：超額報酬價差
   spreadChart = LightweightCharts.createChart(document.getElementById('spread-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => (p >= 0 ? '+' : '') + p.toFixed(2) + '%' }
@@ -446,7 +428,8 @@ function initCharts() {
 
 
 
-    const charts = [ratioChart, klineChart, compareChart, spreadChart];
+
+   const charts = [ratioChart, klineChart, compareChart, spreadChart];
   let isSyncingRange = false;
 
   charts.forEach((sourceChart, idx) => {
@@ -512,7 +495,6 @@ function initCharts() {
 
       const comp = m.comp || {};
 
-      // 產生當日價格列
       const priceCells = COL_KEYS.map(k => {
         const p = comp[k]?.price;
         return `<td style="padding:3px 7px; text-align:right; color:#b2b5be; font-size:11.5px; border-bottom:1px solid #363a45;">
@@ -520,7 +502,6 @@ function initCharts() {
         </td>`;
       }).join('');
 
-      // 產生 單日、5日、30日、60日、90日、120日 各列，並以黃框標示該列第一名
       const periodRowsHtml = PERIOD_ROWS.map(row => {
         let maxVal = -Infinity;
         COL_KEYS.forEach(k => {
@@ -597,6 +578,7 @@ function initCharts() {
     });
   });
 }
+
 
 
 
@@ -739,7 +721,6 @@ function toAlignedPctSeries(targetDict, alignedDates) {
   });
 }
 
-// 預先為「運籌、優質、樂活、935」計算每一天的 單日、5日、30日、60日、90日、120日 漲跌幅
 function buildMultiAssetReturnLookup(dictObj) {
   const sortedEntries = Object.entries(dictObj || {}).sort((a, b) => a.at(0).localeCompare(b.at(0)));
   const lookup = {};
@@ -769,8 +750,8 @@ function buildMultiAssetReturnLookup(dictObj) {
 
 function renderAll() {
   if (!rawData) return;
-  const start = document.getElementById('startDate').value;
-  const end = document.getElementById('endDate').value;
+  const start = currentStartDate;
+  const end = currentEndDate;
 
   document.getElementById('klineTitle').innerText = `三檔基金淨值總覽（目前焦點：${activeFund}）`;
   const ratioTitleEl = document.getElementById('ratioTitle');
@@ -806,7 +787,6 @@ function renderAll() {
   const dict2330 = rawData.benchmarks['台積電(2330)'] || {};
   const dictTwii = rawData.benchmarks['加權指數'] || {};
 
-  // 建立 運籌、優質、樂活、935 四者各自的 6 週期漲跌幅對照表
   const compLookups = {
     '運籌': buildMultiAssetReturnLookup(rawData.funds['野村台灣運籌']),
     '優質': buildMultiAssetReturnLookup(rawData.funds['野村優質(累積)']),
@@ -892,7 +872,8 @@ async function boot() {
       return;
     }
     rawData = await res.json();
-    document.getElementById('updateTime').innerText = '最後更新：' + rawData.updated_at;
+    const updEl = document.getElementById('updateTime');
+    if (updEl) updEl.innerText = '最後更新：' + rawData.updated_at;
     selectActiveFund('野村優質(累積)');
   } catch (err) {
     showError('⚠️ 載入資料發生錯誤：' + err.message);
@@ -901,6 +882,7 @@ async function boot() {
 
 boot();
 </script>
+
   
   
 </body>
