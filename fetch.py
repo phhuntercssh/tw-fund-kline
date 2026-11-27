@@ -383,6 +383,44 @@ def fetch_benchmark_history(session, ticker, existing_dict=None):
     return dict(sorted(result.items()))
 
 
+import json
+from datetime import datetime, timedelta, timezone
+
+# --- 貼在 json.dump 存檔之前 ---
+def clean_and_validate_fund_navs(data_obj):
+    twii_dict = data_obj.get("benchmarks", {}).get("加權指數", {})
+    funds_dict = data_obj.get("funds", {})
+
+    for fund_name, nav_map in funds_dict.items():
+        if not nav_map:
+            continue
+        sorted_dates = sorted(nav_map.keys())
+        dates_to_remove = []
+
+        for i in range(1, len(sorted_dates)):
+            prev_d = sorted_dates[i - 1]
+            curr_d = sorted_dates[i]
+            if abs(nav_map[curr_d] - nav_map[prev_d]) < 1e-6:
+                if prev_d in twii_dict and curr_d in twii_dict and twii_dict[prev_d] > 0:
+                    twii_chg_pct = abs((twii_dict[curr_d] - twii_dict[prev_d]) / twii_dict[prev_d]) * 100
+                    if twii_chg_pct > 0.3:
+                        print(f"[資料清洗] 清除異常重複淨值：{fund_name} {curr_d}（同前日 {nav_map[curr_d]}）")
+                        dates_to_remove.append(curr_d)
+
+        for d in dates_to_remove:
+            del nav_map[d]
+
+# 執行清洗（請確認變數名稱與您 json.dump 裡的變數一致，通常是 data）
+clean_and_validate_fund_navs(data)
+
+# 原本存檔的那幾行：
+with open("data.json", "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+
+
+
 def save_progress(merged_all, benchmarks_data):
     output = {
         "updated_at": (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S CST"),
