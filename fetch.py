@@ -411,7 +411,7 @@ def clean_and_validate_fund_navs(data_obj):
             del nav_map[d]
 
 # 執行清洗（請確認變數名稱與您 json.dump 裡的變數一致，通常是 data）
-clean_and_validate_fund_navs(data)
+clean_and_validate_fund_navs(data_obj)
 
 # 原本存檔的那幾行：
 with open("data.json", "w", encoding="utf-8") as f:
