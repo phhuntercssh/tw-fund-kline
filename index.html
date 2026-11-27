@@ -113,8 +113,8 @@
       <div id="zShortTitle" class="chart-title">附圖 1：20 日短週期 Z-Score（敏感觸發雷達）</div>
       <div class="legend-group">
         <span style="color:#00bcd4;">● 基金 ÷ 00935</span>
-        <span style="color:#ff9800;">● 基金 ÷ 00865B</span>
-        <span style="color:#ab47bc;">● 00935 ÷ 00865B</span>
+        <span style="color:#d500f9;">● 基金 ÷ 00865B</span>
+        <span style="color:#ea80fc;">● 00935 ÷ 00865B</span>
         <span id="zShortExtraLegend" style="display:none; gap:10px;">
           <span style="color:#e91e63;">● 基金 ÷ 台積電</span>
           <span style="color:#2962ff;">● 基金 ÷ 大盤</span>
@@ -131,8 +131,8 @@
       <div id="zLongTitle" class="chart-title">附圖 2：60 日長週期 Z-Score（趨勢定調主軸）</div>
       <div class="legend-group">
         <span style="color:#00bcd4;">● 基金 ÷ 00935</span>
-        <span style="color:#ff9800;">● 基金 ÷ 00865B</span>
-        <span style="color:#ab47bc;">● 00935 ÷ 00865B</span>
+        <span style="color:#d500f9;">● 基金 ÷ 00865B</span>
+        <span style="color:#ea80fc;">● 00935 ÷ 00865B</span>
         <span id="zLongExtraLegend" style="display:none; gap:10px;">
           <span style="color:#e91e63;">● 基金 ÷ 台積電</span>
           <span style="color:#2962ff;">● 基金 ÷ 大盤</span>
@@ -151,7 +151,7 @@
         <span style="color:#00bcd4;">● 基金 ÷ 00935</span>
         <span style="color:#e91e63;">● 基金 ÷ 台積電</span>
         <span style="color:#2962ff;">● 基金 ÷ 大盤</span>
-        <span style="color:#ab47bc;">● 00935 ÷ 00865B</span>
+        <span style="color:#d500f9;">● 00935 ÷ 00865B</span>
         <span id="ratioBaseBadge" style="color:#ffd54f; font-weight:bold;">[基期前日：--]</span>
       </div>
     </div>
@@ -184,7 +184,7 @@ let patternSeriesList = [];
 
 let showZShortExtra = false;
 let showZLongExtra = false;
-let isWheelZoomEnabled = false; // 滑鼠滾輪放縮預設暫停
+let isWheelZoomEnabled = false;
 
 const WINDOW_CONFIGS = {
   '60D':  { label: '60日',  bars: 60,  step: 30,  zShort: 10, zLong: 20 },
@@ -212,10 +212,12 @@ const TOP_FUND_CONFIG = {
   '施羅德台灣樂活A': { color: '#ec407a', priceScaleId: 'left', label: '施羅德台灣樂活A (左軸)' }
 };
 
+// 00865B 相關線條全面改為亮紫色 (#d500f9 / #ea80fc)
 const LINE_COLORS = {
   f_00935: '#00bcd4',
-  f_00865B: '#ff9800',
-  e_00865B: '#ab47bc',
+  f_00865B: '#d500f9',
+  e_00865B: '#ea80fc',
+  ratio_e_00865B: '#d500f9',
   f_2330: '#e91e63',
   f_twii: '#2962ff'
 };
@@ -516,7 +518,6 @@ function recalculateRatioChartForVisibleRange(logicalRange) {
   ratioSeriesMap['e_00865B'].setData(s4);
 }
 
-// 圖 1、圖 2 之 0 軸、+2.0、-2.0 改為粗明線（Solid, lineWidth: 2）
 function addZScoreReferenceLines(seriesObj) {
   seriesObj.createPriceLine({
     price: 2.0,
@@ -593,7 +594,6 @@ function initCharts() {
   z60SeriesMap['f_twii'] = z60Chart.addLineSeries({ color: LINE_COLORS.f_twii, lineWidth: 1.8, visible: false });
   addZScoreReferenceLines(z60SeriesMap['f_00935']);
 
-  // 圖 3 之 100 軸改為粗明線（Solid, lineWidth: 2）
   ratioChart = LightweightCharts.createChart(document.getElementById('ratio-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(1) }
@@ -601,7 +601,7 @@ function initCharts() {
   ratioSeriesMap['f_00935'] = ratioChart.addLineSeries({ color: LINE_COLORS.f_00935, lineWidth: 2 });
   ratioSeriesMap['f_2330'] = ratioChart.addLineSeries({ color: LINE_COLORS.f_2330, lineWidth: 2 });
   ratioSeriesMap['f_twii'] = ratioChart.addLineSeries({ color: LINE_COLORS.f_twii, lineWidth: 2 });
-  ratioSeriesMap['e_00865B'] = ratioChart.addLineSeries({ color: LINE_COLORS.e_00865B, lineWidth: 2 });
+  ratioSeriesMap['e_00865B'] = ratioChart.addLineSeries({ color: LINE_COLORS.ratio_e_00865B, lineWidth: 2 });
   ratioSeriesMap['f_00935'].createPriceLine({
     price: 100,
     color: '#ffd54f',
@@ -679,7 +679,6 @@ function initCharts() {
   `;
   document.body.appendChild(tooltip);
 
-  // 浮動視窗欄位：運籌、優質、樂活、00935、00865B
   const COL_KEYS = ['運籌', '優質', '樂活', '00935', '00865B'];
   const PERIOD_ROWS = [
     { key: 'd1', label: '單日' },
@@ -785,7 +784,7 @@ function initCharts() {
               <th style="padding:3px 6px; text-align:right; color:#ffd54f;">優質</th>
               <th style="padding:3px 6px; text-align:right; color:#ec407a;">樂活</th>
               <th style="padding:3px 6px; text-align:right; color:#00bcd4;">00935</th>
-              <th style="padding:3px 6px; text-align:right; color:#ab47bc;">00865B</th>
+              <th style="padding:3px 6px; text-align:right; color:#d500f9;">00865B</th>
             </tr>
             <tr>
               <td style="padding:3px 6px 3px 2px; color:#9598a1; font-size:11.5px; border-bottom:1px solid #363a45;">淨值/價</td>
@@ -797,8 +796,8 @@ function initCharts() {
           </tbody>
         </table>
         <div style="margin-top:6px; padding-top:5px; border-top:1px solid #363a45; font-size:11px; line-height:1.55;">
-          <div><b style="color:#9598a1;">${wCfg.zShort}D Z：</b> <span style="color:#00bcd4;">÷935</span> ${fmtZ(m.zs_f_00935)} ｜ <span style="color:#ff9800;">÷865B</span> ${fmtZ(m.zs_f_00865B)} ｜ <span style="color:#ab47bc;">935/865B</span> ${fmtZ(m.zs_e_00865B)}</div>
-          <div><b style="color:#9598a1;">${wCfg.zLong}D Z：</b> <span style="color:#00bcd4;">÷935</span> ${fmtZ(m.zl_f_00935)} ｜ <span style="color:#ff9800;">÷865B</span> ${fmtZ(m.zl_f_00865B)} ｜ <span style="color:#ab47bc;">935/865B</span> ${fmtZ(m.zl_e_00865B)}</div>
+          <div><b style="color:#9598a1;">${wCfg.zShort}D Z：</b> <span style="color:#00bcd4;">÷935</span> ${fmtZ(m.zs_f_00935)} ｜ <span style="color:#d500f9;">÷865B</span> ${fmtZ(m.zs_f_00865B)} ｜ <span style="color:#ea80fc;">935/865B</span> ${fmtZ(m.zs_e_00865B)}</div>
+          <div><b style="color:#9598a1;">${wCfg.zLong}D Z：</b> <span style="color:#00bcd4;">÷935</span> ${fmtZ(m.zl_f_00935)} ｜ <span style="color:#d500f9;">÷865B</span> ${fmtZ(m.zl_f_00865B)} ｜ <span style="color:#ea80fc;">935/865B</span> ${fmtZ(m.zl_e_00865B)}</div>
         </div>
       `;
 
