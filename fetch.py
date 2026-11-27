@@ -415,7 +415,7 @@ clean_and_validate_fund_navs(data)
 
 # 原本存檔的那幾行：
 with open("data.json", "w", encoding="utf-8") as f:
-    json.dump(data, f, ensure_ascii=False, indent=2)
+    json.dump(data_obj, f, ensure_ascii=False, indent=2)
 
 
 
