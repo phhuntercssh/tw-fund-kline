@@ -107,7 +107,7 @@
     <span id="updateTime" class="note" style="margin-left:auto;">載入中...</span>
   </div>
 
-  <!-- 附圖 1（最上方）：短週期 Z-Score（隨時間自動切換 10D/15D/20D/40D） -->
+  <!-- 附圖 1（最上方）：短週期 Z-Score -->
   <div class="chart-card">
     <div class="chart-header">
       <div id="zShortTitle" class="chart-title">附圖 1：20 日短週期 Z-Score（敏感觸發雷達）</div>
@@ -125,7 +125,7 @@
     <div id="z20-chart" class="chart-box"></div>
   </div>
 
-  <!-- 附圖 2（第二張）：長週期 Z-Score（隨時間自動切換 20D/40D/60D/120D） -->
+  <!-- 附圖 2（第二張）：長週期 Z-Score -->
   <div class="chart-card">
     <div class="chart-header">
       <div id="zLongTitle" class="chart-title">附圖 2：60 日長週期 Z-Score（趨勢定調主軸）</div>
@@ -143,7 +143,7 @@
     <div id="z60-chart" class="chart-box"></div>
   </div>
 
-  <!-- 附圖 3（第三張）：相對強度趨勢圖（基期 100 標準化 = 當天比值 ÷ 線圖第 1 天前第一天的比值 × 100） -->
+  <!-- 附圖 3（第三張）：相對強度趨勢圖（基期 100 標準化） -->
   <div class="chart-card">
     <div class="chart-header">
       <div id="ratioTitle" class="chart-title">附圖 3：相對強度趨勢圖（基期 100 標準化）</div>
@@ -171,10 +171,7 @@
       <div id="leftFundLegendOverlay" style="position:absolute; top:8px; left:68px; z-index:20; display:flex; flex-direction:column; gap:4px; pointer-events:none;"></div>
     </div>
   </div>
-
-
-
-  <script>
+<script>
 let rawData = null;
 let activeFund = '野村優質(累積)';
 
@@ -187,6 +184,7 @@ let patternSeriesList = [];
 
 let showZShortExtra = false;
 let showZLongExtra = false;
+let isWheelZoomEnabled = false; // 滑鼠滾輪放縮預設暫停
 
 const WINDOW_CONFIGS = {
   '60D':  { label: '60日',  bars: 60,  step: 30,  zShort: 10, zLong: 20 },
@@ -266,6 +264,27 @@ function getAllAvailableFundDates() {
   return Array.from(dateSet).sort((a, b) => a.localeCompare(b));
 }
 
+function applyZoomStateToAllCharts() {
+  const charts = [z20Chart, z60Chart, ratioChart, klineChart];
+  charts.forEach(c => {
+    if (c) {
+      c.applyOptions({
+        handleScale: {
+          mouseWheel: isWheelZoomEnabled,
+          pinch: isWheelZoomEnabled,
+          axisPressedMouseMove: isWheelZoomEnabled
+        },
+        handleScroll: {
+          mouseWheel: isWheelZoomEnabled,
+          pressedMouseMove: isWheelZoomEnabled,
+          horzTouchDrag: isWheelZoomEnabled,
+          vertTouchDrag: false
+        }
+      });
+    }
+  });
+}
+
 function buildCombinedControlBar() {
   const fundBar = document.getElementById('topFundBar');
   const dateBar = document.getElementById('dateQuickBar');
@@ -303,7 +322,15 @@ function buildCombinedControlBar() {
       rollBtn.style.color = isAtLatest ? '#a5d6a7' : '#131722';
       rollBtn.style.borderColor = isAtLatest ? '#2e7d32' : '#ff9800';
       rollBtn.style.fontWeight = 'bold';
-      rollBtn.innerText = isAtLatest ? '▶ 向右滾動 (最新)' : '⏭ 向右滾動 (回最新)';
+      rollBtn.innerText = isAtLatest ? '▶ (最新)' : '⏭ (最新)';
+    }
+    const zoomBtn = document.getElementById('btnToggleWheelZoom');
+    if (zoomBtn) {
+      zoomBtn.style.background = isWheelZoomEnabled ? '#00897b' : '#2a2e39';
+      zoomBtn.style.color = isWheelZoomEnabled ? '#ffffff' : '#9598a1';
+      zoomBtn.style.borderColor = isWheelZoomEnabled ? '#26a69a' : '#485c7b';
+      zoomBtn.style.fontWeight = isWheelZoomEnabled ? 'bold' : 'normal';
+      zoomBtn.innerText = isWheelZoomEnabled ? '🔍 滾輪縮放：開' : '🔒 滾輪縮放：關';
     }
   };
 
@@ -353,11 +380,20 @@ function buildCombinedControlBar() {
     },
     {
       id: 'btnRollLatest',
-      text: '▶ 向右滾動 (最新)',
+      text: '▶ (最新)',
       onClick: () => {
         windowEndOffsetFromLatest = 0;
         updatePresetBtnStyle();
         renderAll();
+      }
+    },
+    {
+      id: 'btnToggleWheelZoom',
+      text: '🔒 滾輪縮放：關',
+      onClick: () => {
+        isWheelZoomEnabled = !isWheelZoomEnabled;
+        applyZoomStateToAllCharts();
+        updatePresetBtnStyle();
       }
     }
   ];
@@ -424,12 +460,7 @@ function selectActiveFund(fundName) {
 
   renderAll();
 }
-
-
-
-
-
-  function recalculateRatioChartForVisibleRange(logicalRange) {
+function recalculateRatioChartForVisibleRange(logicalRange) {
   if (!currentAlignedDates || currentAlignedDates.length === 0) return;
 
   let startIdx = 0;
@@ -485,10 +516,32 @@ function selectActiveFund(fundName) {
   ratioSeriesMap['e_00865B'].setData(s4);
 }
 
+// 圖 1、圖 2 之 0 軸、+2.0、-2.0 改為粗明線（Solid, lineWidth: 2）
 function addZScoreReferenceLines(seriesObj) {
-  seriesObj.createPriceLine({ price: 2.0, color: '#ef5350', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '+2σ' });
-  seriesObj.createPriceLine({ price: 0.0, color: '#787b86', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '0' });
-  seriesObj.createPriceLine({ price: -2.0, color: '#26a69a', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '-2σ' });
+  seriesObj.createPriceLine({
+    price: 2.0,
+    color: '#ff5252',
+    lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Solid,
+    axisLabelVisible: true,
+    title: '+2.0'
+  });
+  seriesObj.createPriceLine({
+    price: 0.0,
+    color: '#e0e3eb',
+    lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Solid,
+    axisLabelVisible: true,
+    title: '0'
+  });
+  seriesObj.createPriceLine({
+    price: -2.0,
+    color: '#00e676',
+    lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Solid,
+    axisLabelVisible: true,
+    title: '-2.0'
+  });
 }
 
 function initCharts() {
@@ -503,6 +556,17 @@ function initCharts() {
       rightOffset: 0,
       fixRightEdge: true,
       fixLeftEdge: true
+    },
+    handleScale: {
+      mouseWheel: isWheelZoomEnabled,
+      pinch: isWheelZoomEnabled,
+      axisPressedMouseMove: isWheelZoomEnabled
+    },
+    handleScroll: {
+      mouseWheel: isWheelZoomEnabled,
+      pressedMouseMove: isWheelZoomEnabled,
+      horzTouchDrag: isWheelZoomEnabled,
+      vertTouchDrag: false
     },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
   };
@@ -529,6 +593,7 @@ function initCharts() {
   z60SeriesMap['f_twii'] = z60Chart.addLineSeries({ color: LINE_COLORS.f_twii, lineWidth: 1.8, visible: false });
   addZScoreReferenceLines(z60SeriesMap['f_00935']);
 
+  // 圖 3 之 100 軸改為粗明線（Solid, lineWidth: 2）
   ratioChart = LightweightCharts.createChart(document.getElementById('ratio-chart'), {
     ...commonOptions,
     localization: { priceFormatter: p => p.toFixed(1) }
@@ -540,10 +605,10 @@ function initCharts() {
   ratioSeriesMap['f_00935'].createPriceLine({
     price: 100,
     color: '#ffd54f',
-    lineWidth: 1,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
+    lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Solid,
     axisLabelVisible: true,
-    title: ''
+    title: '100'
   });
 
   klineChart = LightweightCharts.createChart(document.getElementById('kline-chart'), {
@@ -581,13 +646,7 @@ function initCharts() {
       selectActiveFund(closestFund);
     }
   });
-
-
-
-
-
-
-    const charts = [z20Chart, z60Chart, ratioChart, klineChart];
+  const charts = [z20Chart, z60Chart, ratioChart, klineChart];
   let isSyncingRange = false;
 
   charts.forEach((sourceChart) => {
@@ -620,7 +679,8 @@ function initCharts() {
   `;
   document.body.appendChild(tooltip);
 
-  const COL_KEYS = ['運籌', '優質', '樂活', '935'];
+  // 浮動視窗欄位：運籌、優質、樂活、00935、00865B
+  const COL_KEYS = ['運籌', '優質', '樂活', '00935', '00865B'];
   const PERIOD_ROWS = [
     { key: 'd1', label: '單日' },
     { key: 'd5', label: '5日' },
@@ -673,7 +733,7 @@ function initCharts() {
 
       const priceCells = COL_KEYS.map(k => {
         const p = comp[k]?.price;
-        return `<td style="padding:3px 7px; text-align:right; color:#b2b5be; font-size:11.5px; border-bottom:1px solid #363a45;">
+        return `<td style="padding:3px 6px; text-align:right; color:#b2b5be; font-size:11.5px; border-bottom:1px solid #363a45;">
           ${typeof p === 'number' && Number.isFinite(p) ? p.toFixed(2) : '--'}
         </td>`;
       }).join('');
@@ -690,15 +750,15 @@ function initCharts() {
         const cells = COL_KEYS.map(k => {
           const val = comp[k]?.[row.key];
           if (typeof val !== 'number' || !Number.isFinite(val)) {
-            return `<td style="padding:4px 7px; text-align:right; color:#787b86;">--</td>`;
+            return `<td style="padding:4px 6px; text-align:right; color:#787b86;">--</td>`;
           }
           const isFirst = (maxVal > -Infinity) && (Math.abs(val - maxVal) < 1e-6);
           const textColor = val > 0 ? '#ef5350' : (val < 0 ? '#26a69a' : '#d1d4dc');
           const boxStyle = isFirst
-            ? 'border:1.5px solid #ffd54f; border-radius:4px; padding:1px 5px; background:rgba(255,213,79,0.14); display:inline-block;'
-            : 'padding:1px 5px; display:inline-block;';
+            ? 'border:1.5px solid #ffd54f; border-radius:4px; padding:1px 4px; background:rgba(255,213,79,0.14); display:inline-block;'
+            : 'padding:1px 4px; display:inline-block;';
 
-          return `<td style="padding:3px 5px; text-align:right;">
+          return `<td style="padding:3px 4px; text-align:right;">
             <span style="${boxStyle} color:${textColor}; font-weight:bold;">
               ${val >= 0 ? '+' : ''}${val.toFixed(2)}%
             </span>
@@ -706,7 +766,7 @@ function initCharts() {
         }).join('');
 
         return `<tr>
-          <td style="padding:3px 8px 3px 2px; color:#d1d4dc; font-weight:bold; white-space:nowrap;">${row.label}</td>
+          <td style="padding:3px 6px 3px 2px; color:#d1d4dc; font-weight:bold; white-space:nowrap;">${row.label}</td>
           ${cells}
         </tr>`;
       }).join('');
@@ -720,14 +780,15 @@ function initCharts() {
         <table style="border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums;">
           <thead>
             <tr style="border-bottom:1px solid #363a45;">
-              <th style="padding:3px 8px 3px 2px; text-align:left; color:#9598a1; font-weight:normal;">週期</th>
-              <th style="padding:3px 7px; text-align:right; color:#ff9800;">運籌</th>
-              <th style="padding:3px 7px; text-align:right; color:#ffd54f;">優質</th>
-              <th style="padding:3px 7px; text-align:right; color:#ec407a;">樂活</th>
-              <th style="padding:3px 7px; text-align:right; color:#00bcd4;">935</th>
+              <th style="padding:3px 6px 3px 2px; text-align:left; color:#9598a1; font-weight:normal;">週期</th>
+              <th style="padding:3px 6px; text-align:right; color:#ff9800;">運籌</th>
+              <th style="padding:3px 6px; text-align:right; color:#ffd54f;">優質</th>
+              <th style="padding:3px 6px; text-align:right; color:#ec407a;">樂活</th>
+              <th style="padding:3px 6px; text-align:right; color:#00bcd4;">00935</th>
+              <th style="padding:3px 6px; text-align:right; color:#ab47bc;">00865B</th>
             </tr>
             <tr>
-              <td style="padding:3px 8px 3px 2px; color:#9598a1; font-size:11.5px; border-bottom:1px solid #363a45;">淨值/價</td>
+              <td style="padding:3px 6px 3px 2px; color:#9598a1; font-size:11.5px; border-bottom:1px solid #363a45;">淨值/價</td>
               ${priceCells}
             </tr>
           </thead>
@@ -750,7 +811,7 @@ function initCharts() {
 
       const mouseX = param.sourceEvent ? param.sourceEvent.clientX : 0;
       const mouseY = param.sourceEvent ? param.sourceEvent.clientY : 0;
-      const boxW = tooltip.offsetWidth || 365;
+      const boxW = tooltip.offsetWidth || 415;
       const boxH = tooltip.offsetHeight || 315;
       const leftPos = (mouseX + boxW + 20 > window.innerWidth) ? (mouseX - boxW - 15) : (mouseX + 16);
       const topPos = (mouseY + boxH + 20 > window.innerHeight) ? Math.max(10, window.innerHeight - boxH - 15) : (mouseY + 16);
@@ -767,14 +828,6 @@ function initCharts() {
     });
   });
 }
-
-
-
-
-
-
-
-
 function detectAndDrawPatterns(entries, targetPriceScaleId) {
   for (const s of patternSeriesList) {
     try { klineChart.removeSeries(s); } catch (e) {}
@@ -957,11 +1010,6 @@ function buildRollingZScoreFromRatioMap(ratioMap, windowSize) {
   }
   return zLookup;
 }
-
-
-
-
-
 function renderAll() {
   if (!rawData) return;
 
@@ -1033,7 +1081,8 @@ function renderAll() {
   }
 
   const zs_f_00935 = buildRollingZScoreFromRatioMap(allHistoricalRatioMaps.fund_00935, wCfg.zShort);
-  const zs_f_00865B = buildRollingZScoreFromRatioMap(allHistoricalRatioMaps.fund_00865B, wCfg.zShort);
+  const zs_f_00865B = buildRollingZScoreFromRatioMap(allHistoricalRatioMaps.fund_
+00865B, wCfg.zShort);
   const zs_e_00865B = buildRollingZScoreFromRatioMap(allHistoricalRatioMaps.etf_00865B, wCfg.zShort);
   const zs_f_2330 = buildRollingZScoreFromRatioMap(allHistoricalRatioMaps.fund_2330, wCfg.zShort);
   const zs_f_twii = buildRollingZScoreFromRatioMap(allHistoricalRatioMaps.fund_twii, wCfg.zShort);
@@ -1048,7 +1097,8 @@ function renderAll() {
     '運籌': buildMultiAssetReturnLookup(rawData.funds['野村台灣運籌']),
     '優質': buildMultiAssetReturnLookup(rawData.funds['野村優質(累積)']),
     '樂活': buildMultiAssetReturnLookup(rawData.funds['施羅德台灣樂活A']),
-    '935': buildMultiAssetReturnLookup(dict00935)
+    '00935': buildMultiAssetReturnLookup(dict00935),
+    '00865B': buildMultiAssetReturnLookup(dict00865B)
   };
 
   currentMetricsMap = {};
@@ -1086,7 +1136,8 @@ function renderAll() {
         '運籌': compLookups['運籌'][d],
         '優質': compLookups['優質'][d],
         '樂活': compLookups['樂活'][d],
-        '935': compLookups['935'][d]
+        '00935': compLookups['00935'][d],
+        '00865B': compLookups['00865B'][d]
       },
       zs_f_00935: vs1,
       zs_f_00865B: vs2,
